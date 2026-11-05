@@ -1,0 +1,64 @@
+[project]
+name = "ir"
+version = "0.1.0"
+description = "AIC2024 Known-Item Search system"
+readme = "README.md"
+authors = [
+    { name = "Nguyễn Hoàng Ân", email = "24520056@gm.uit.edu.vn" }
+]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.scripts]
+ir = "ir.cli:main"
+
+[dependency-groups]
+ml = [
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "sentence-transformers>=3.0",
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "transformers>=4.44",
+]
+index = [
+    "av>=12.0",
+    "scenedetect>=0.6.4",
+    "transnetv2-pytorch>=0.1",
+]
+boost = [
+    "faster-whisper>=1.0",
+    "ultralytics>=8.3",
+]
+serve = [
+    "faiss-cpu>=1.8",
+    "fastapi>=0.115",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
