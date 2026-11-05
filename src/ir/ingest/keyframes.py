@@ -18,12 +18,25 @@ logger = logging.getLogger(__name__)
 Target = tuple[int, int, int, int]
 
 
-def _frame_time_ms(frame, stream) -> int:
+def frame_time_ms(frame, stream) -> int:
     if frame.time is not None:
         return int(round(frame.time * 1000))
     if frame.pts is not None:
         return int(round(float(frame.pts * stream.time_base) * 1000))
     return 0
+
+
+def save_frame_image(rgb: np.ndarray, path: Path, cfg: KeyframeConfig) -> None:
+    image = Image.fromarray(rgb)
+    width, height = image.size
+    scale = cfg.short_side / min(width, height)
+    if scale < 1:
+        image = image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format="JPEG", quality=cfg.jpeg_quality)
 
 
 def _write_frame(
@@ -34,17 +47,8 @@ def _write_frame(
     kf_idx: int,
     cfg: KeyframeConfig,
 ) -> str:
-    image = Image.fromarray(rgb)
-    width, height = image.size
-    scale = cfg.short_side / min(width, height)
-    if scale < 1:
-        image = image.resize(
-            (max(1, round(width * scale)), max(1, round(height * scale))),
-            Image.Resampling.LANCZOS,
-        )
     path = video_dir / f"{shot_idx:06d}_{kf_idx:03d}.jpg"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, format="JPEG", quality=cfg.jpeg_quality)
+    save_frame_image(rgb, path, cfg)
     return path.relative_to(artifacts_dir).as_posix()
 
 
@@ -101,7 +105,7 @@ def extract_keyframes(
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
         for frame in container.decode(stream):
-            timestamp = _frame_time_ms(frame, stream)
+            timestamp = frame_time_ms(frame, stream)
             while pending and pending[0][0] <= timestamp:
                 ts_ms, shot_idx, kf_idx, _ = pending.popleft()
                 switch_shot(shot_idx)

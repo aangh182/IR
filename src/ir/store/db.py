@@ -3,9 +3,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from ..types import Keyframe, Shot, Video
+from ..types import FollowFrame, Keyframe, Shot, Video
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -46,6 +46,20 @@ CREATE TABLE IF NOT EXISTS keyframes (
 
 CREATE INDEX IF NOT EXISTS idx_keyframes_video_ts
     ON keyframes (video_id, ts_ms);
+
+CREATE TABLE IF NOT EXISTS follow_frames (
+    video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL DEFAULT 0,
+    shot_idx INTEGER NOT NULL,
+    kf_idx INTEGER NOT NULL,
+    frame_idx INTEGER NOT NULL,
+    ts_ms INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (video_id, generation, shot_idx, kf_idx, frame_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_follow_frames_shot
+    ON follow_frames (video_id, generation, shot_idx);
 
 CREATE TABLE IF NOT EXISTS asr_segments (
     video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
@@ -142,7 +156,7 @@ def compact_video(conn: sqlite3.Connection, video_id: str) -> dict[str, int]:
         raise KeyError(f"unknown video_id: {video_id}")
     generation = int(row["generation"])
     deleted: dict[str, int] = {}
-    for table in ("keyframes", "shots", "asr_segments"):
+    for table in ("keyframes", "follow_frames", "shots", "asr_segments"):
         cur = conn.execute(
             f"DELETE FROM {table} WHERE video_id = ? AND generation < ?",
             (video_id, generation),
@@ -241,6 +255,87 @@ def delete_keyframes(conn: sqlite3.Connection, video_id: str, generation: int) -
     return cur.rowcount
 
 
+def load_keyframes(
+    conn: sqlite3.Connection, video_id: str, generation: int
+) -> list[Keyframe]:
+    rows = conn.execute(
+        """
+        SELECT video_id, generation, shot_idx, kf_idx, ts_ms, path
+        FROM keyframes WHERE video_id = ? AND generation = ?
+        ORDER BY shot_idx, kf_idx
+        """,
+        (video_id, generation),
+    ).fetchall()
+    return [
+        Keyframe(
+            video_id=str(row["video_id"]),
+            shot_idx=int(row["shot_idx"]),
+            kf_idx=int(row["kf_idx"]),
+            ts_ms=int(row["ts_ms"]),
+            path=str(row["path"]),
+            generation=int(row["generation"]),
+        )
+        for row in rows
+    ]
+
+
+def insert_follow_frame(conn: sqlite3.Connection, frame: FollowFrame) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO follow_frames
+            (video_id, generation, shot_idx, kf_idx, frame_idx, ts_ms, path)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            frame.video_id,
+            frame.generation,
+            frame.shot_idx,
+            frame.kf_idx,
+            frame.frame_idx,
+            frame.ts_ms,
+            frame.path,
+        ),
+    )
+    conn.commit()
+
+
+def delete_follow_frames(conn: sqlite3.Connection, video_id: str, generation: int) -> int:
+    cur = conn.execute(
+        "DELETE FROM follow_frames WHERE video_id = ? AND generation = ?",
+        (video_id, generation),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def load_follow_frames(
+    conn: sqlite3.Connection, video_id: str, generation: int, shot_idx: int | None = None
+) -> list[FollowFrame]:
+    query = """
+        SELECT video_id, generation, shot_idx, kf_idx, frame_idx, ts_ms, path
+        FROM follow_frames WHERE video_id = ? AND generation = ?
+    """
+    params: list[object] = [video_id, generation]
+    if shot_idx is not None:
+        query += " AND shot_idx = ?"
+        params.append(shot_idx)
+    query += " ORDER BY shot_idx, kf_idx, frame_idx"
+
+    rows = conn.execute(query, params).fetchall()
+    return [
+        FollowFrame(
+            video_id=str(row["video_id"]),
+            shot_idx=int(row["shot_idx"]),
+            kf_idx=int(row["kf_idx"]),
+            frame_idx=int(row["frame_idx"]),
+            ts_ms=int(row["ts_ms"]),
+            path=str(row["path"]),
+            generation=int(row["generation"]),
+        )
+        for row in rows
+    ]
+
+
 def set_index_status(
     conn: sqlite3.Connection,
     video_id: str,
@@ -295,5 +390,6 @@ def get_stats(conn: sqlite3.Connection) -> dict[str, int]:
         "videos": int(conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]),
         "shots": active_count("shots"),
         "keyframes": active_count("keyframes"),
+        "follow_frames": active_count("follow_frames"),
         "asr_segments": active_count("asr_segments"),
     }

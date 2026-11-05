@@ -6,12 +6,15 @@ from ir.store.db import (
     bump_generation,
     compact_video,
     connect,
+    delete_follow_frames,
     get_stats,
     init_db,
+    insert_follow_frame,
     insert_keyframe,
+    load_follow_frames,
     upsert_video,
 )
-from ir.types import Keyframe, Video
+from ir.types import FollowFrame, Keyframe, Video
 
 
 def _video(video_id: str) -> Video:
@@ -43,7 +46,13 @@ def test_init_and_active_counts(tmp_path) -> None:
 
         counts = get_stats(conn)
 
-    assert counts == {"videos": 1, "shots": 1, "keyframes": 1, "asr_segments": 0}
+    assert counts == {
+        "videos": 1,
+        "shots": 1,
+        "keyframes": 1,
+        "follow_frames": 0,
+        "asr_segments": 0,
+    }
 
 
 def test_keyframe_index_is_unique_per_shot(tmp_path) -> None:
@@ -86,7 +95,13 @@ def test_reindex_is_append_only_then_compact(tmp_path) -> None:
         conn.commit()
 
         assert bump_generation(conn, "L21_V001") == 1
-        assert get_stats(conn) == {"videos": 1, "shots": 0, "keyframes": 0, "asr_segments": 0}
+        assert get_stats(conn) == {
+            "videos": 1,
+            "shots": 0,
+            "keyframes": 0,
+            "follow_frames": 0,
+            "asr_segments": 0,
+        }
 
         conn.execute(
             "INSERT INTO shots (video_id, generation, shot_idx, start_ms, end_ms) "
@@ -97,4 +112,36 @@ def test_reindex_is_append_only_then_compact(tmp_path) -> None:
 
         deleted = compact_video(conn, "L21_V001")
 
-    assert deleted == {"keyframes": 1, "shots": 1, "asr_segments": 1}
+    assert deleted == {
+        "keyframes": 1,
+        "follow_frames": 0,
+        "shots": 1,
+        "asr_segments": 1,
+    }
+
+
+def test_follow_frames_roundtrip(tmp_path) -> None:
+    db_path = init_db(tmp_path / "metadata.sqlite")
+
+    with closing(connect(db_path)) as conn:
+        upsert_video(conn, _video("L21_V001"))
+        for frame_idx in range(2):
+            insert_follow_frame(
+                conn,
+                FollowFrame(
+                    video_id="L21_V001",
+                    shot_idx=0,
+                    kf_idx=0,
+                    frame_idx=frame_idx,
+                    ts_ms=3000 + frame_idx * 500,
+                    path=f"follow_frames/L21_V001/g0/000000_000_{frame_idx:03d}.jpg",
+                ),
+            )
+
+        assert get_stats(conn)["follow_frames"] == 2
+        loaded = load_follow_frames(conn, "L21_V001", 0, shot_idx=0)
+        assert [frame.ts_ms for frame in loaded] == [3000, 3500]
+        assert load_follow_frames(conn, "L21_V001", 0, shot_idx=1) == []
+
+        assert delete_follow_frames(conn, "L21_V001", 0) == 2
+        assert get_stats(conn)["follow_frames"] == 0

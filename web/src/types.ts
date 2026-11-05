@@ -12,7 +12,16 @@ export type Stats = {
   videos: number
   shots: number
   keyframes: number
+  follow_frames: number
   asr_segments: number
+}
+
+export type FrameOption = {
+  ts_ms: number
+  start_ms: number
+  end_ms: number
+  url: string
+  is_keyframe: boolean
 }
 
 export type Hit = {
@@ -23,6 +32,7 @@ export type Hit = {
   score: number
   confidence: number
   keyframe_url: string
+  frames: FrameOption[]
   evidence: {
     ocr: string
     asr: string

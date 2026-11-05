@@ -5,7 +5,7 @@ from contextlib import closing
 from ir.config import AppConfig
 from ir.index import build as build_module
 from ir.store.db import connect, get_stats
-from ir.types import Keyframe, Shot, Video
+from ir.types import FollowFrame, Keyframe, Shot, Video
 
 
 def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
@@ -40,22 +40,41 @@ def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
         ],
     )
 
+    def fake_follow(*args, **kwargs):
+        calls.append("follow")
+        return [
+            FollowFrame(
+                video_id="L21_V001",
+                shot_idx=0,
+                kf_idx=0,
+                frame_idx=0,
+                ts_ms=1500,
+                path=f"follow_frames/L21_V001/g{args[6]}/000000_000_000.jpg",
+                generation=args[6],
+            )
+        ]
+
+    monkeypatch.setattr(build_module, "extract_follow_frames", fake_follow)
+
     first = build_module.build(cfg)
     assert (first.videos, first.shots, first.keyframes, first.failed) == (1, 1, 1, 0)
+    assert first.follow_frames == 1
 
     second = build_module.build(cfg)
     assert second.skipped == 1
-    assert (second.shots, second.keyframes) == (0, 0)
+    assert (second.shots, second.keyframes, second.follow_frames) == (0, 0, 0)
 
     third = build_module.build(cfg, reindex=True)
     assert (third.shots, third.keyframes, third.skipped) == (1, 1, 0)
+    assert third.follow_frames == 1
 
-    assert calls == ["shots", "keyframes", "shots", "keyframes"]
+    assert calls == ["shots", "keyframes", "follow", "shots", "keyframes", "follow"]
 
     with closing(connect(cfg.db_path)) as conn:
         assert get_stats(conn) == {
             "videos": 1,
             "shots": 1,
             "keyframes": 1,
+            "follow_frames": 1,
             "asr_segments": 0,
         }

@@ -168,7 +168,8 @@ function App() {
           {stats && (
             <p className="mt-3 text-xs text-slate-500">
               {stats.videos.toLocaleString('vi-VN')} video · {stats.shots.toLocaleString('vi-VN')} shot ·{' '}
-              {stats.keyframes.toLocaleString('vi-VN')} keyframe
+              {stats.keyframes.toLocaleString('vi-VN')} keyframe ·{' '}
+              {stats.follow_frames.toLocaleString('vi-VN')} frame lướt
             </p>
           )}
         </section>

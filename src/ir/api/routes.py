@@ -91,6 +91,23 @@ def keyframe(path: str, request: Request) -> FileResponse:
     )
 
 
+@router.get("/frames/{path:path}")
+def follow_frame(path: str, request: Request) -> FileResponse:
+    cfg = _config(request)
+    root = cfg.follow_frames_dir.resolve()
+    target = (root / path).resolve()
+
+    if not target.is_relative_to(root) or not target.is_file():
+        raise HTTPException(status_code=404, detail="frame not found")
+
+    media_type = mimetypes.guess_type(target.name)[0] or "image/jpeg"
+    return FileResponse(
+        target,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/videos/{video_id}/stream")
 def stream_video(video_id: str, request: Request) -> FileResponse:
     cfg = _config(request)

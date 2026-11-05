@@ -23,7 +23,13 @@ def test_health_and_stats(tmp_path) -> None:
 
         stats = client.get("/api/stats")
         assert stats.status_code == 200
-        assert stats.json() == {"videos": 0, "shots": 0, "keyframes": 0, "asr_segments": 0}
+        assert stats.json() == {
+            "videos": 0,
+            "shots": 0,
+            "keyframes": 0,
+            "follow_frames": 0,
+            "asr_segments": 0,
+        }
 
 
 def test_search_without_index_returns_503(tmp_path) -> None:
@@ -69,4 +75,20 @@ def test_keyframe_route(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.content == b"jpeg-bytes"
+
+
+def test_follow_frame_route(tmp_path) -> None:
+    cfg = AppConfig(artifacts_dir=tmp_path / "artifacts")
+    frame_path = cfg.follow_frames_dir / "V1" / "g0" / "000000_000_001.jpg"
+    frame_path.parent.mkdir(parents=True)
+    frame_path.write_bytes(b"follow-bytes")
+
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        response = client.get("/api/frames/V1/g0/000000_000_001.jpg")
+        missing = client.get("/api/frames/V1/g0/missing.jpg")
+
+    assert response.status_code == 200
+    assert response.content == b"follow-bytes"
+    assert missing.status_code == 404
 

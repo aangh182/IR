@@ -31,6 +31,7 @@ def init() -> None:
 @app.command()
 def stats() -> None:
     cfg = load_config()
+    init_db(cfg.db_path)
     with closing(connect(cfg.db_path)) as conn:
         counts = get_stats(conn)
     for key, value in counts.items():
@@ -43,7 +44,7 @@ def index(
     limit: Annotated[int | None, typer.Option(help="Chỉ index N video đầu tiên.")] = None,
     only: Annotated[
         list[str] | None,
-        typer.Option("--only", help="Chỉ chạy bước shots và/hoặc keyframes."),
+        typer.Option("--only", help="Chỉ chạy bước shots, keyframes và/hoặc follow."),
     ] = None,
     reindex: Annotated[
         bool, typer.Option("--reindex", help="Index lại, tạo generation mới.")
@@ -54,6 +55,7 @@ def index(
     report = build(cfg, corpus_dir=corpus, limit=limit, steps=only, reindex=reindex)
     typer.echo(
         f"videos={report.videos} shots={report.shots} keyframes={report.keyframes} "
+        f"follow_frames={report.follow_frames} "
         f"skipped={report.skipped} failed={report.failed}"
     )
     for error in report.errors:
@@ -94,6 +96,7 @@ def search(
     from .search.service import IndexUnavailableError, SearchService
 
     cfg = load_config()
+    init_db(cfg.db_path)
     try:
         response = SearchService(cfg).search(query, top_k)
     except (IndexUnavailableError, ValueError) as exc:

@@ -24,6 +24,12 @@ class KeyframeFilterConfig(BaseModel):
     duplicate_distance: int = 5
 
 
+class FollowConfig(BaseModel):
+    step_sec: float = 0.5
+    max_frames: int = 8
+    window_sec: float = 1.0
+
+
 class KeyframeConfig(BaseModel):
     short_side: int = 448
     jpeg_quality: int = 90
@@ -31,6 +37,7 @@ class KeyframeConfig(BaseModel):
     every_sec: float = 5.0
     max_per_shot: int = 5
     filter: KeyframeFilterConfig = Field(default_factory=KeyframeFilterConfig)
+    follow: FollowConfig = Field(default_factory=FollowConfig)
 
 
 class EmbedConfig(BaseModel):
@@ -118,6 +125,10 @@ class AppConfig(BaseModel):
     @property
     def keyframes_dir(self) -> Path:
         return self.artifacts_dir / "keyframes"
+
+    @property
+    def follow_frames_dir(self) -> Path:
+        return self.artifacts_dir / "follow_frames"
 
     @property
     def embeddings_dir(self) -> Path:

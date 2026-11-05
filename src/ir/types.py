@@ -33,6 +33,24 @@ class Keyframe(BaseModel):
     objects: list[str] = Field(default_factory=list)
 
 
+class FollowFrame(BaseModel):
+    video_id: str
+    shot_idx: int
+    kf_idx: int
+    frame_idx: int
+    ts_ms: int
+    path: str
+    generation: int = 0
+
+
+class FrameOption(BaseModel):
+    ts_ms: int
+    start_ms: int
+    end_ms: int
+    url: str
+    is_keyframe: bool = False
+
+
 class Evidence(BaseModel):
     ocr: str = ""
     asr: str = ""
@@ -47,6 +65,7 @@ class Hit(BaseModel):
     score: float
     confidence: float
     keyframe_url: str = ""
+    frames: list[FrameOption] = Field(default_factory=list)
     evidence: Evidence = Field(default_factory=Evidence)
 
 

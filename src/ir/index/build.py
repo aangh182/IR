@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import AppConfig
+from ..ingest.follow import extract_follow_frames
 from ..ingest.keyframes import extract_keyframes
 from ..ingest.scan import scan_corpus
 from ..ingest.shots import detect_shots
@@ -15,10 +16,13 @@ from ..store.db import (
     compact_video,
     connect,
     current_generation,
+    delete_follow_frames,
     delete_keyframes,
     delete_shots,
     init_db,
+    insert_follow_frame,
     insert_keyframe,
+    load_keyframes,
     load_shots,
     set_index_status,
     step_done,
@@ -35,6 +39,7 @@ class BuildReport:
     videos: int = 0
     shots: int = 0
     keyframes: int = 0
+    follow_frames: int = 0
     skipped: int = 0
     failed: int = 0
     errors: list[str] = field(default_factory=list)
@@ -47,8 +52,8 @@ def build(
     steps: list[str] | None = None,
     reindex: bool = False,
 ) -> BuildReport:
-    steps = list(steps or ["shots", "keyframes"])
-    unknown = set(steps) - {"shots", "keyframes"}
+    steps = list(steps or ["shots", "keyframes", "follow"])
+    unknown = set(steps) - {"shots", "keyframes", "follow"}
     if unknown:
         raise ValueError(f"unknown steps: {sorted(unknown)}")
 
@@ -142,6 +147,38 @@ def _process_video(
         did_work = True
         logger.info("%s: %d keyframes", video.video_id, len(keyframes))
 
+    if "follow" in steps and not step_done(conn, video.video_id, generation, "follow"):
+        set_index_status(conn, video.video_id, generation, "follow", "running")
+        try:
+            delete_follow_frames(conn, video.video_id, generation)
+            shutil.rmtree(
+                cfg.follow_frames_dir / video.video_id / f"g{generation}", ignore_errors=True
+            )
+            keyframes = load_keyframes(conn, video.video_id, generation)
+            count = 0
+            if not keyframes or not shots:
+                logger.warning("%s: no keyframes/shots for follow frames", video.video_id)
+            else:
+                follow_frames = extract_follow_frames(
+                    video.path,
+                    video.video_id,
+                    keyframes,
+                    shots,
+                    cfg.keyframe,
+                    cfg.artifacts_dir,
+                    generation,
+                )
+                for follow_frame in follow_frames:
+                    insert_follow_frame(conn, follow_frame)
+                count = len(follow_frames)
+                report.follow_frames += count
+            set_index_status(conn, video.video_id, generation, "follow", "done")
+        except Exception as exc:
+            set_index_status(conn, video.video_id, generation, "follow", "failed", str(exc))
+            raise
+        did_work = True
+        logger.info("%s: %d follow frames", video.video_id, count)
+
     if not did_work:
         report.skipped += 1
 
@@ -151,10 +188,11 @@ def _process_video(
 
 
 def _cleanup_previous_generations(cfg: AppConfig, video_id: str, generation: int) -> None:
-    video_dir = cfg.keyframes_dir / video_id
-    if not video_dir.exists():
-        return
     current = f"g{generation}"
-    for child in video_dir.iterdir():
-        if child.is_dir() and child.name != current:
-            shutil.rmtree(child, ignore_errors=True)
+    for root in (cfg.keyframes_dir, cfg.follow_frames_dir):
+        video_dir = root / video_id
+        if not video_dir.exists():
+            continue
+        for child in video_dir.iterdir():
+            if child.is_dir() and child.name != current:
+                shutil.rmtree(child, ignore_errors=True)

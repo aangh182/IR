@@ -84,20 +84,34 @@ uv run uvicorn ir.api.main:app --reload
 cd web && npm run dev
 ```
 
-- `POST /api/search` — `{text, top_k}` → keyframe + shot interval + `dres_payload`.
+- `POST /api/search` — `{text, top_k}` → keyframe + shot interval + danh sách `frames` (keyframe + follow frames, mỗi frame có interval riêng) + `dres_payload`.
 - `GET /api/keyframes/{path}` — ảnh keyframe.
+- `GET /api/frames/{path}` — ảnh follow frame.
 - `GET /api/videos/{id}/stream` — video gốc, hỗ trợ HTTP Range.
-- Web UI: grid keyframe, click → player seek `start_ms`, copy DRES payload.
+- Web UI: grid keyframe, click → player seek, dải thumbnail chọn frame đúng nhất, copy DRES payload theo frame được chọn.
 
 Hiện search nhận query tiếng Anh; lớp dịch vi→en chưa thêm.
 
 ## Chạy keyframe
 
 ```bash
-uv run ir index                    # resume: video đã có shot sẽ chạy keyframe
+uv run ir index                    # resume: video đã có shot sẽ chạy keyframe + follow frames
 uv run ir index --only keyframes   # chỉ chạy keyframe
+uv run ir index --only follow      # chỉ extract follow frames (backfill, giữ nguyên keyframe/embedding)
 uv run ir stats
 ```
+
+Follow frames: sau mỗi keyframe, extract thêm các frame kế tiếp **trong cùng shot** để chọn ra frame đúng nhất. Cấu hình trong `config.yaml`:
+
+```yaml
+keyframe:
+  follow:
+    step_sec: 0.5     # khoảng cách giữa các frame
+    max_frames: 8     # tối đa mỗi keyframe
+    window_sec: 1.0   # độ dài interval quanh frame khi chọn
+```
+
+Ảnh lưu ở `artifacts/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.jpg`, metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
 
 Lưu ý:
 
