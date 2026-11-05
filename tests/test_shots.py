@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ir.ingest.shots import build_shots
+from ir.ingest.shots import build_shots, merge_short_bursts
+from ir.types import Shot
 
 
 def test_no_scenes_covers_whole_video() -> None:
@@ -47,3 +48,45 @@ def test_scores_keep_maximum_when_merging() -> None:
 
     assert len(shots) == 1
     assert shots[0].scene_score == 0.9
+
+
+def _shots(spans: list[tuple[int, int]]) -> list[Shot]:
+    return [
+        Shot(video_id="v", shot_idx=index, start_ms=start, end_ms=end)
+        for index, (start, end) in enumerate(spans)
+    ]
+
+
+def test_isolated_short_shot_is_kept() -> None:
+    shots = _shots([(0, 3000), (3000, 4000), (4000, 9000)])
+
+    merged = merge_short_bursts(shots, 1500)
+
+    assert [(shot.start_ms, shot.end_ms) for shot in merged] == [
+        (0, 3000),
+        (3000, 4000),
+        (4000, 9000),
+    ]
+
+
+def test_run_of_short_shots_merges_into_previous() -> None:
+    shots = _shots([(0, 3000), (3000, 4000), (4000, 5000), (5000, 9000)])
+
+    merged = merge_short_bursts(shots, 1500)
+
+    assert [(shot.start_ms, shot.end_ms) for shot in merged] == [(0, 5000), (5000, 9000)]
+    assert [shot.shot_idx for shot in merged] == [0, 1]
+
+
+def test_short_burst_at_start_merges_into_next() -> None:
+    shots = _shots([(0, 1000), (1000, 2000), (2000, 6000)])
+
+    merged = merge_short_bursts(shots, 1500)
+
+    assert [(shot.start_ms, shot.end_ms) for shot in merged] == [(0, 6000)]
+
+
+def test_zero_threshold_disables_burst_merge() -> None:
+    shots = _shots([(0, 1000), (1000, 2000), (2000, 6000)])
+
+    assert merge_short_bursts(shots, 0) == shots

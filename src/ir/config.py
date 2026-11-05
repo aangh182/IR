@@ -11,12 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ShotConfig(BaseModel):
-    backend: Literal["transnetv2", "pyscenedetect"] = "transnetv2"
-    fallback: Literal["pyscenedetect", "none"] = "pyscenedetect"
-    threshold: float = 0.5
     pyscenedetect_threshold: float = 27.0
+    pyscenedetect_burst_merge_sec: float = 1.5
     min_shot_sec: float = 0.5
-    device: Literal["auto", "cpu", "cuda"] = "auto"
 
 
 class KeyframeFilterConfig(BaseModel):

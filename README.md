@@ -5,7 +5,11 @@ Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (V
 ## Trạng thái
 
 - [x] Phase 0: nền tảng, config, SQLite schema, CLI, FastAPI, web scaffold
-- [x] Phase 1: TransNetV2 shot detection + keyframe extraction (PyAV, lọc frame rác)
+- [x] Phase 1: shot detection + keyframe extraction (PyAV, lọc frame rác)
+  - [x] Shot detection: PySceneDetect `ContentDetector` (đã thay TransNetV2)
+  - [x] Gộp burst card/transition/cảnh rung thành một shot
+  - [x] Bỏ TransNetV2, CLI/config song song và notebook Colab/Kaggle
+  - [ ] Chạy keyframe trên corpus thật — code sẵn sàng, xem lệnh bên dưới
 - [ ] Phase 2: CLIP embedding + FAISS + search text
 - [ ] Phase 3: OCR / ASR / object boost
 - [ ] Phase 4: UI hoàn chỉnh (grid, player seek, timer, DRES payload)
@@ -20,7 +24,7 @@ Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (V
 
 ```bash
 uv python install 3.11
-uv sync --group ml --group serve
+uv sync --group ml --group index --group serve
 uv run ir init
 uv run uvicorn ir.api.main:app --reload
 ```
@@ -33,23 +37,6 @@ npm install
 npm run dev
 ```
 
-## Index trên Colab/Kaggle (GPU)
-
-Trên Colab, cài vào system Python để dùng torch CUDA có sẵn (không tạo venv 3.11 riêng):
-
-```bash
-pip install -q uv
-uv pip install --system -e .
-uv pip install --system --group ml --group index
-ir index --corpus /content/drive/MyDrive/aic2024/videos
-```
-
-Trên Kaggle: copy repo sang `/kaggle/working/IR` (vì `/kaggle/input` read-only), `%cd` vào đó, corpus ở `/kaggle/input/...`, dùng cùng hai lệnh `uv pip install --system` như trên.
-
-Với corpus lớn (100GB+): mở `scripts/kaggle_index.ipynb`. Notebook quét tất cả dataset batch đang attach, chia shard, chạy theo deadline 11h và restore artifact từ notebook version trước để resume. Nếu upload bị giới hạn, chỉ cần attach thêm batch; notebook tự gom lại.
-
-Hoặc mở `scripts/colab_index.ipynb` (có cell restore artifact để resume). Artifact nằm trong `artifacts/` (metadata.sqlite, keyframes/).
-
 ## Index
 
 ```bash
@@ -59,6 +46,28 @@ uv run ir index --only shots       # chỉ detect shot
 uv run ir index --reindex          # tạo generation mới rồi compact bản cũ
 uv run ir stats
 ```
+
+Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
+
+- `shot.pyscenedetect_threshold`: ngưỡng cắt cảnh (mặc định 27.0).
+- `shot.pyscenedetect_burst_merge_sec`: gộp các cụm ≥2 shot ngắn liên tiếp (card
+  chuyển cảnh, transition, cảnh rung) thành một shot, giữ nguyên shot ngắn đơn lẻ.
+  Đặt `0` để tắt.
+- `shot.min_shot_sec`: thời lượng shot tối thiểu.
+
+## Chạy keyframe
+
+```bash
+uv run ir index                    # resume: video đã có shot sẽ chạy keyframe
+uv run ir index --only keyframes   # chỉ chạy keyframe
+uv run ir stats
+```
+
+Lưu ý:
+
+- `artifacts/` đang chứa kết quả cũ của TransNetV2. Dùng `uv run ir index --reindex`
+  nếu muốn sinh lại toàn bộ shot + keyframe bằng PySceneDetect.
+- `artifacts_pyscene/` là output so sánh cũ, không còn được pipeline dùng, có thể xóa.
 
 ## Kiểm tra
 

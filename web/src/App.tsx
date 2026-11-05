@@ -112,7 +112,7 @@ function App() {
           <p className="font-medium text-slate-300">Phase 0 · nền tảng</p>
           <p className="mt-2">
             Config, SQLite schema (append-only + compact), CLI và FastAPI đã sẵn sàng. Pipeline
-            TransNetV2 → keyframe → CLIP → FAISS sẽ được nối ở Phase 1–2.
+            PySceneDetect → keyframe → CLIP → FAISS sẽ được nối ở Phase 1–2.
           </p>
           {error && <p className="mt-3 text-red-400">Lỗi kết nối API: {error}</p>}
           {health && (

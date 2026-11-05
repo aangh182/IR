@@ -2,12 +2,9 @@ corpus_dir: minibatch
 artifacts_dir: artifacts
 
 shot:
-  backend: transnetv2
-  fallback: pyscenedetect
-  threshold: 0.5
   pyscenedetect_threshold: 27.0
+  pyscenedetect_burst_merge_sec: 1.5
   min_shot_sec: 0.5
-  device: auto
 
 keyframe:
   short_side: 448
