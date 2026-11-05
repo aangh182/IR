@@ -63,6 +63,29 @@ def index(
 
 
 @app.command()
+def merge(
+    shards: Annotated[
+        Path | None, typer.Option(help="Thư mục shards; mặc định artifacts/.../shards.")
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option(help="Thư mục output; mặc định cạnh thư mục shards.")
+    ] = None,
+) -> None:
+    from .index.merge import merge_shards
+
+    cfg = load_config()
+    try:
+        report = merge_shards(cfg, shards, output)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}"
+    )
+
+
+@app.command()
 def search(
     query: Annotated[str, typer.Argument(help="Mô tả sự kiện (tiếng Anh).")],
     top_k: Annotated[int, typer.Option("--top-k", "-k", min=1, max=50)] = 20,

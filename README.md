@@ -57,9 +57,24 @@ Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
 
 ## Embedding (Kaggle)
 
-`scripts/kaggle_embed.ipynb` là notebook self-contained. Upload `artifacts/` (`metadata.sqlite` + `keyframes/`) thành Kaggle Dataset, bật GPU + Internet, chạy hết cell rồi tải `artifacts_embed.zip`. Giải nén vào `artifacts/` — code tự nhận cả `artifacts/embeddings.f16.npy` lẫn `artifacts/artifacts_embed/`.
+`scripts/kaggle_embed.ipynb` là notebook self-contained, xuất **mỗi video một shard** để chạy Kaggle theo nhiều batch.
 
-Output: `embeddings.f16.npy`, `id_map.npy`, `faiss.index`, `manifest.json`.
+1. Upload `artifacts/` (`metadata.sqlite` + `keyframes/`) thành Kaggle Dataset; bật GPU + Internet.
+2. Chọn batch bằng env:
+   - mặc định: tất cả video;
+   - `EMBED_VIDEO_OFFSET` + `EMBED_VIDEO_LIMIT` (ví dụ 0/100, 100/100, ...);
+   - hoặc `EMBED_VIDEO_IDS=L01_V001,L01_V002`.
+3. Tải `artifacts_embed_shards.zip`, giải nén vào `artifacts/artifacts_embed/` để có `artifacts/artifacts_embed/shards/<video_id>/`.
+4. Merge ở local:
+
+```bash
+uv run ir merge
+uv run ir merge --shards artifacts/artifacts_embed/shards --output artifacts/artifacts_embed
+```
+
+`ir merge` đọc toàn bộ shard hiện có và build `embeddings.f16.npy`, `id_map.npy`, `faiss.index`, `manifest.json`. Có thể merge sau mỗi batch.
+
+Mỗi shard gồm `embeddings.f16.npy`, `id_map.npy`, `manifest.json`; notebook resume được theo từng video.
 
 ## Search
 

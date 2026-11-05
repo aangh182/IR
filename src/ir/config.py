@@ -142,6 +142,13 @@ class AppConfig(BaseModel):
     def manifest_path(self) -> Path:
         return self.embeddings_dir / "manifest.json"
 
+    @property
+    def shards_dir(self) -> Path:
+        nested = self.artifacts_dir / "artifacts_embed" / "shards"
+        if nested.is_dir():
+            return nested
+        return self.artifacts_dir / "shards"
+
 
 def _resolve(base: Path, value: str | Path) -> Path:
     path = Path(value)
