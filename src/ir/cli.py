@@ -63,9 +63,31 @@ def index(
 
 
 @app.command()
-def search(query: str) -> None:
-    typer.echo(f"Phase 2 chưa triển khai: CLIP + FAISS search cho {query!r}")
-    raise typer.Exit(code=1)
+def search(
+    query: Annotated[str, typer.Argument(help="Mô tả sự kiện (tiếng Anh).")],
+    top_k: Annotated[int, typer.Option("--top-k", "-k", min=1, max=50)] = 20,
+    as_json: Annotated[bool, typer.Option("--json", help="In JSON.")] = False,
+) -> None:
+    from .search.service import IndexUnavailableError, SearchService
+
+    cfg = load_config()
+    try:
+        response = SearchService(cfg).search(query, top_k)
+    except (IndexUnavailableError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if as_json:
+        typer.echo(response.model_dump_json(indent=2))
+        return
+
+    typer.echo(f"{len(response.results)} kết quả · {response.elapsed_ms} ms")
+    for rank, hit in enumerate(response.results, start=1):
+        typer.echo(
+            f"{rank:>2}. {hit.video_id}  {_format_ms(hit.start_ms)} → {_format_ms(hit.end_ms)}  "
+            f"score={hit.score:.4f}"
+        )
+        typer.echo(f"    {hit.keyframe_url}")
 
 
 @app.command()
@@ -74,6 +96,15 @@ def serve(reload: bool = False) -> None:
 
     cfg = load_config()
     uvicorn.run("ir.api.main:app", host=cfg.api.host, port=cfg.api.port, reload=reload)
+
+
+def _format_ms(value: int) -> str:
+    seconds, milliseconds = divmod(max(0, value), 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+    return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
 def main() -> None:

@@ -9,8 +9,8 @@ Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (V
   - [x] Shot detection: PySceneDetect `ContentDetector` (đã thay TransNetV2)
   - [x] Gộp burst card/transition/cảnh rung thành một shot
   - [x] Bỏ TransNetV2, CLI/config song song và notebook Colab/Kaggle
-  - [ ] Chạy keyframe trên corpus thật — code sẵn sàng, xem lệnh bên dưới
-- [ ] Phase 2: CLIP embedding + FAISS + search text
+  - [x] Chạy keyframe trên corpus thật (53 video minibatch)
+- [x] Phase 2: CLIP embedding (Kaggle notebook) + FAISS + search text + web UI keyframe/video
 - [ ] Phase 3: OCR / ASR / object boost
 - [ ] Phase 4: UI hoàn chỉnh (grid, player seek, timer, DRES payload)
 - [ ] Phase 5: eval & tune
@@ -55,6 +55,27 @@ Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
   Đặt `0` để tắt.
 - `shot.min_shot_sec`: thời lượng shot tối thiểu.
 
+## Embedding (Kaggle)
+
+`scripts/kaggle_embed.ipynb` là notebook self-contained. Upload `artifacts/` (`metadata.sqlite` + `keyframes/`) thành Kaggle Dataset, bật GPU + Internet, chạy hết cell rồi tải `artifacts_embed.zip`. Giải nén vào `artifacts/` — code tự nhận cả `artifacts/embeddings.f16.npy` lẫn `artifacts/artifacts_embed/`.
+
+Output: `embeddings.f16.npy`, `id_map.npy`, `faiss.index`, `manifest.json`.
+
+## Search
+
+```bash
+uv run ir search "a person speaking at a conference" -k 10
+uv run uvicorn ir.api.main:app --reload
+cd web && npm run dev
+```
+
+- `POST /api/search` — `{text, top_k}` → keyframe + shot interval + `dres_payload`.
+- `GET /api/keyframes/{path}` — ảnh keyframe.
+- `GET /api/videos/{id}/stream` — video gốc, hỗ trợ HTTP Range.
+- Web UI: grid keyframe, click → player seek `start_ms`, copy DRES payload.
+
+Hiện search nhận query tiếng Anh; lớp dịch vi→en chưa thêm.
+
 ## Chạy keyframe
 
 ```bash
@@ -65,9 +86,8 @@ uv run ir stats
 
 Lưu ý:
 
-- `artifacts/` đang chứa kết quả cũ của TransNetV2. Dùng `uv run ir index --reindex`
-  nếu muốn sinh lại toàn bộ shot + keyframe bằng PySceneDetect.
-- `artifacts_pyscene/` là output so sánh cũ, không còn được pipeline dùng, có thể xóa.
+- Artifacts hiện tại đã sinh bằng PySceneDetect; dùng `uv run ir index --reindex` nếu muốn tạo generation mới.
+- Embedding lấy từ notebook Kaggle, giải nén vào `artifacts/` hoặc `artifacts/artifacts_embed/`.
 
 ## Kiểm tra
 
@@ -78,4 +98,4 @@ uv run ruff check .
 
 ## Cấu trúc
 
-`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite), `api` (FastAPI), `cli`; `web/` là Vite React UI; `artifacts/` chứa DB, embeddings, FAISS index và keyframe (gitignored).
+`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite + FAISS), `search` (CLIP encoder + search service), `api` (FastAPI), `cli`; `web/` là Vite React UI; `scripts/kaggle_embed.ipynb` là notebook embed trên Kaggle; `artifacts/` chứa DB, embeddings, FAISS index và keyframe (gitignored).

@@ -1,124 +1,238 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 
-type Health = {
-  status: string
-  version: string
-  db: string
-  db_ready: boolean
-}
+import { ResultCard } from './components/ResultCard'
+import { VideoPanel } from './components/VideoPanel'
+import type { Health, Hit, SearchResponse, Stats } from './types'
 
-type Stats = {
-  videos: number
-  shots: number
-  keyframes: number
-  asr_segments: number
-}
-
-const STAT_LABELS: Array<[keyof Stats, string]> = [
-  ['videos', 'Videos'],
-  ['shots', 'Shots'],
-  ['keyframes', 'Keyframes'],
-  ['asr_segments', 'ASR segments'],
+const EXAMPLES = [
+  'a person speaking at a conference',
+  'a football match in a stadium',
+  'a news anchor at a desk',
 ]
+
+async function responseError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown }
+    if (typeof body.detail === 'string') return body.detail
+  } catch {
+    // fall through to HTTP status
+  }
+  return `HTTP ${response.status}`
+}
 
 function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<Hit[]>([])
+  const [selected, setSelected] = useState<Hit | null>(null)
+  const [elapsed, setElapsed] = useState<number | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+
     Promise.all([
-      fetch('/api/health').then((res) => {
-        if (!res.ok) throw new Error(`health: HTTP ${res.status}`)
-        return res.json() as Promise<Health>
+      fetch('/api/health').then((response) => {
+        if (!response.ok) throw new Error(`health: HTTP ${response.status}`)
+        return response.json() as Promise<Health>
       }),
-      fetch('/api/stats').then((res) => {
-        if (!res.ok) throw new Error(`stats: HTTP ${res.status}`)
-        return res.json() as Promise<Stats>
+      fetch('/api/stats').then((response) => {
+        if (!response.ok) throw new Error(`stats: HTTP ${response.status}`)
+        return response.json() as Promise<Stats>
       }),
     ])
       .then(([healthData, statsData]) => {
+        if (cancelled) return
         setHealth(healthData)
         setStats(statsData)
       })
-      .catch((err: Error) => setError(err.message))
+      .catch((err: Error) => {
+        if (!cancelled) setStatusError(err.message)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
+  async function runSearch(text: string) {
+    const trimmed = text.trim()
+    if (!trimmed || loading) return
+
+    setLoading(true)
+    setError(null)
+    setHasSearched(true)
+
+    try {
+      const response = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: trimmed, top_k: 20 }),
+      })
+      if (!response.ok) throw new Error(await responseError(response))
+
+      const data = (await response.json()) as SearchResponse
+      setResults(data.results)
+      setSelected(data.results[0] ?? null)
+      setElapsed(data.elapsed_ms)
+    } catch (err) {
+      setResults([])
+      setSelected(null)
+      setElapsed(null)
+      setError(err instanceof Error ? err.message : 'Lỗi không xác định')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void runSearch(query)
+  }
+
   const online = health?.status === 'ok'
+  const indexReady = health?.index_ready === true
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-5">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">AIC2024</p>
             <h1 className="text-2xl font-semibold">Known-Item Search</h1>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                online ? 'bg-emerald-400' : error ? 'bg-red-400' : 'bg-slate-500'
-              }`}
-            />
-            <span className="text-slate-400">
-              {error ? 'API offline' : online ? `API ${health?.version}` : 'Đang kiểm tra...'}
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            {indexReady ? (
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
+                {health?.index_count?.toLocaleString('vi-VN') ?? '?'} keyframes đã embed
+              </span>
+            ) : (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">
+                Index chưa sẵn sàng
+              </span>
+            )}
+            <span className="flex items-center gap-2 text-xs text-slate-400">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  online ? 'bg-emerald-400' : statusError ? 'bg-red-400' : 'bg-slate-500'
+                }`}
+              />
+              {statusError ? 'API offline' : online ? `API ${health?.version}` : 'Đang kiểm tra...'}
             </span>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
-        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-          <label className="text-sm font-medium text-slate-300" htmlFor="query">
-            Mô tả sự kiện
-          </label>
-          <div className="mt-2 flex gap-3">
+      <main className="mx-auto max-w-7xl px-6 py-8">
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row">
             <input
-              id="query"
-              disabled
-              placeholder="Phase 2: nhập mô tả tiếng Việt để tìm keyframe..."
-              className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-400 placeholder:text-slate-600"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Mô tả sự kiện bằng tiếng Anh..."
+              spellCheck={false}
+              className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-indigo-400"
             />
             <button
-              type="button"
-              disabled
-              className="rounded-lg bg-indigo-500/40 px-5 py-3 text-sm font-medium text-indigo-200"
+              type="submit"
+              disabled={loading || !query.trim()}
+              className="rounded-xl bg-indigo-500 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
-              Tìm
+              {loading ? 'Đang tìm...' : 'Tìm'}
             </button>
-          </div>
-          <div className="mt-4 flex gap-2 text-xs text-slate-400">
-            <span className="rounded-full border border-slate-700 px-3 py-1">Textual KIS</span>
-            <span className="rounded-full border border-slate-700 px-3 py-1">Video KIS</span>
-            <span className="rounded-full border border-slate-700 px-3 py-1">Q&amp;A</span>
-          </div>
-        </section>
+          </form>
 
-        <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {STAT_LABELS.map(([key, label]) => (
-            <div
-              key={key}
-              className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"
-            >
-              <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-              <p className="mt-2 text-3xl font-semibold tabular-nums">
-                {stats ? stats[key].toLocaleString('vi-VN') : '—'}
-              </p>
-            </div>
-          ))}
-        </section>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>Ví dụ:</span>
+            {EXAMPLES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                onClick={() => {
+                  setQuery(example)
+                  void runSearch(example)
+                }}
+                className="rounded-full border border-slate-700 px-3 py-1 text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
 
-        <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-400">
-          <p className="font-medium text-slate-300">Phase 0 · nền tảng</p>
-          <p className="mt-2">
-            Config, SQLite schema (append-only + compact), CLI và FastAPI đã sẵn sàng. Pipeline
-            PySceneDetect → keyframe → CLIP → FAISS sẽ được nối ở Phase 1–2.
-          </p>
-          {error && <p className="mt-3 text-red-400">Lỗi kết nối API: {error}</p>}
-          {health && (
-            <p className="mt-3 font-mono text-xs text-slate-500">DB: {health.db}</p>
+          {stats && (
+            <p className="mt-3 text-xs text-slate-500">
+              {stats.videos.toLocaleString('vi-VN')} video · {stats.shots.toLocaleString('vi-VN')} shot ·{' '}
+              {stats.keyframes.toLocaleString('vi-VN')} keyframe
+            </p>
           )}
         </section>
+
+        {health && !indexReady && (
+          <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+            Chưa thấy embedding artifacts. Chạy notebook Kaggle rồi giải nén vào `artifacts/` để bật search.
+          </p>
+        )}
+
+        {statusError && (
+          <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            Không kết nối được API: {statusError}
+          </p>
+        )}
+
+        {error && (
+          <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+          <section>
+            <div className="mb-3 flex items-center justify-between text-sm text-slate-400">
+              <span>{hasSearched ? `${results.length} kết quả` : 'Kết quả'}</span>
+              {hasSearched && elapsed !== null && <span>{elapsed} ms</span>}
+            </div>
+
+            {results.length > 0 ? (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {results.map((hit) => (
+                  <ResultCard
+                    key={`${hit.video_id}-${hit.shot_idx}`}
+                    hit={hit}
+                    selected={selected?.video_id === hit.video_id && selected.shot_idx === hit.shot_idx}
+                    onSelect={setSelected}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">
+                {loading
+                  ? 'Đang tìm...'
+                  : hasSearched
+                    ? 'Không có kết quả.'
+                    : 'Nhập mô tả tiếng Anh để tìm keyframe.'}
+              </div>
+            )}
+          </section>
+
+          <aside className="lg:sticky lg:top-6 lg:self-start">
+            {selected ? (
+              <VideoPanel
+                key={`${selected.video_id}-${selected.shot_idx}-${selected.start_ms}`}
+                hit={selected}
+              />
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">
+                Chọn một kết quả để xem frame và video.
+              </div>
+            )}
+          </aside>
+        </div>
       </main>
     </div>
   )

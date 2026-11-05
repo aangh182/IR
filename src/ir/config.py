@@ -120,12 +120,27 @@ class AppConfig(BaseModel):
         return self.artifacts_dir / "keyframes"
 
     @property
+    def embeddings_dir(self) -> Path:
+        nested = self.artifacts_dir / "artifacts_embed"
+        if (nested / "manifest.json").is_file():
+            return nested
+        return self.artifacts_dir
+
+    @property
     def embeddings_path(self) -> Path:
-        return self.artifacts_dir / "embeddings.f16.npy"
+        return self.embeddings_dir / "embeddings.f16.npy"
 
     @property
     def faiss_path(self) -> Path:
-        return self.artifacts_dir / "faiss.index"
+        return self.embeddings_dir / "faiss.index"
+
+    @property
+    def id_map_path(self) -> Path:
+        return self.embeddings_dir / "id_map.npy"
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.embeddings_dir / "manifest.json"
 
 
 def _resolve(base: Path, value: str | Path) -> Path:
