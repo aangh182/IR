@@ -57,6 +57,16 @@ def build(
     if unknown:
         raise ValueError(f"unknown steps: {sorted(unknown)}")
 
+    # A new generation is only safe when every step is rebuilt: steps left out
+    # would lose their previous generation to the cleanup below.
+    new_generation = reindex and set(steps) == {"shots", "keyframes", "follow"}
+    force = reindex and not new_generation
+    if force:
+        logger.warning(
+            "--reindex with partial steps (%s): rerunning in the current generation",
+            ", ".join(sorted(set(steps))),
+        )
+
     videos = scan_corpus(corpus_dir or cfg.corpus_dir)
     if limit is not None:
         videos = videos[:limit]
@@ -67,7 +77,7 @@ def build(
         for video in videos:
             report.videos += 1
             try:
-                _process_video(conn, cfg, video, steps, reindex, report)
+                _process_video(conn, cfg, video, steps, new_generation, force, report)
             except Exception as exc:
                 report.failed += 1
                 report.errors.append(f"{video.video_id}: {exc}")
@@ -80,13 +90,14 @@ def _process_video(
     cfg: AppConfig,
     video: Video,
     steps: list[str],
-    reindex: bool,
+    new_generation: bool,
+    force: bool,
     report: BuildReport,
 ) -> None:
     upsert_video(conn, video)
     generation = (
         bump_generation(conn, video.video_id)
-        if reindex
+        if new_generation
         else current_generation(conn, video.video_id)
     )
     logger.info(
@@ -98,7 +109,7 @@ def _process_video(
     did_work = False
     shots: list[Shot] | None = None
 
-    if "shots" in steps and not step_done(conn, video.video_id, generation, "shots"):
+    if "shots" in steps and (force or not step_done(conn, video.video_id, generation, "shots")):
         set_index_status(conn, video.video_id, generation, "shots", "running")
         try:
             shots = detect_shots(
@@ -122,7 +133,9 @@ def _process_video(
     if shots is None:
         shots = load_shots(conn, video.video_id, generation)
 
-    if "keyframes" in steps and not step_done(conn, video.video_id, generation, "keyframes"):
+    if "keyframes" in steps and (
+        force or not step_done(conn, video.video_id, generation, "keyframes")
+    ):
         if not shots:
             raise RuntimeError("no shots available for keyframe extraction")
         set_index_status(conn, video.video_id, generation, "keyframes", "running")
@@ -147,31 +160,30 @@ def _process_video(
         did_work = True
         logger.info("%s: %d keyframes", video.video_id, len(keyframes))
 
-    if "follow" in steps and not step_done(conn, video.video_id, generation, "follow"):
+    if "follow" in steps and (force or not step_done(conn, video.video_id, generation, "follow")):
         set_index_status(conn, video.video_id, generation, "follow", "running")
         try:
+            keyframes = load_keyframes(conn, video.video_id, generation)
+            if not keyframes or not shots:
+                raise RuntimeError("no shots/keyframes available for follow frame extraction")
             delete_follow_frames(conn, video.video_id, generation)
             shutil.rmtree(
                 cfg.follow_frames_dir / video.video_id / f"g{generation}", ignore_errors=True
             )
-            keyframes = load_keyframes(conn, video.video_id, generation)
             count = 0
-            if not keyframes or not shots:
-                logger.warning("%s: no keyframes/shots for follow frames", video.video_id)
-            else:
-                follow_frames = extract_follow_frames(
-                    video.path,
-                    video.video_id,
-                    keyframes,
-                    shots,
-                    cfg.keyframe,
-                    cfg.artifacts_dir,
-                    generation,
-                )
-                for follow_frame in follow_frames:
-                    insert_follow_frame(conn, follow_frame)
-                count = len(follow_frames)
-                report.follow_frames += count
+            follow_frames = extract_follow_frames(
+                video.path,
+                video.video_id,
+                keyframes,
+                shots,
+                cfg.keyframe,
+                cfg.artifacts_dir,
+                generation,
+            )
+            for follow_frame in follow_frames:
+                insert_follow_frame(conn, follow_frame)
+            count = len(follow_frames)
+            report.follow_frames += count
             set_index_status(conn, video.video_id, generation, "follow", "done")
         except Exception as exc:
             set_index_status(conn, video.video_id, generation, "follow", "failed", str(exc))
@@ -182,7 +194,7 @@ def _process_video(
     if not did_work:
         report.skipped += 1
 
-    if reindex:
+    if new_generation:
         _cleanup_previous_generations(cfg, video.video_id, generation)
         compact_video(conn, video.video_id)
 

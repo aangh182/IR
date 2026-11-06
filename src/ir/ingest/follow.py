@@ -43,6 +43,8 @@ def extract_follow_frames(
         return []
 
     video_dir = artifacts_dir / "follow_frames" / video_id / f"g{generation}"
+    image_format = cfg.follow.image_format
+    suffix = ".webp" if image_format == "webp" else ".jpg"
     extracted: list[FollowFrame] = []
     hashes: dict[tuple[int, int], list[int]] = defaultdict(list)
     counts: dict[tuple[int, int], int] = defaultdict(int)
@@ -67,8 +69,14 @@ def extract_follow_frames(
 
                 frame_idx = counts[group]
                 counts[group] += 1
-                path = video_dir / f"{shot_idx:06d}_{kf_idx:03d}_{frame_idx:03d}.jpg"
-                save_frame_image(rgb, path, cfg)
+                path = video_dir / f"{shot_idx:06d}_{kf_idx:03d}_{frame_idx:03d}{suffix}"
+                save_frame_image(
+                    rgb,
+                    path,
+                    cfg.follow.short_side,
+                    cfg.follow.quality,
+                    image_format.upper(),
+                )
                 extracted.append(
                     FollowFrame(
                         video_id=video_id,

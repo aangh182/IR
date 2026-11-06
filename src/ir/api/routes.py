@@ -17,6 +17,8 @@ from ..types import SearchResponse
 
 router = APIRouter(prefix="/api", tags=["search"])
 
+mimetypes.add_type("image/webp", ".webp")
+
 
 class SearchRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)

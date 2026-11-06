@@ -82,13 +82,18 @@ def test_follow_frame_route(tmp_path) -> None:
     frame_path = cfg.follow_frames_dir / "V1" / "g0" / "000000_000_001.jpg"
     frame_path.parent.mkdir(parents=True)
     frame_path.write_bytes(b"follow-bytes")
+    webp_path = cfg.follow_frames_dir / "V1" / "g0" / "000000_000_002.webp"
+    webp_path.write_bytes(b"webp-bytes")
 
     app = create_app(cfg)
     with TestClient(app) as client:
         response = client.get("/api/frames/V1/g0/000000_000_001.jpg")
+        webp_response = client.get("/api/frames/V1/g0/000000_000_002.webp")
         missing = client.get("/api/frames/V1/g0/missing.jpg")
 
     assert response.status_code == 200
     assert response.content == b"follow-bytes"
+    assert webp_response.status_code == 200
+    assert webp_response.headers["content-type"] == "image/webp"
     assert missing.status_code == 404
 

@@ -22,6 +22,9 @@ keyframe:
     step_sec: 0.5
     max_frames: 8
     window_sec: 1.0
+    short_side: 320
+    quality: 75
+    image_format: webp
 
 embed:
   model: sentence-transformers/clip-ViT-B-16

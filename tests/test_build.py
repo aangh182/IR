@@ -4,11 +4,16 @@ from contextlib import closing
 
 from ir.config import AppConfig
 from ir.index import build as build_module
-from ir.store.db import connect, get_stats
+from ir.store.db import (
+    connect,
+    current_generation,
+    get_index_status,
+    get_stats,
+)
 from ir.types import FollowFrame, Keyframe, Shot, Video
 
 
-def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
+def _patch_pipeline(tmp_path, monkeypatch, calls: list[str]) -> AppConfig:
     cfg = AppConfig(corpus_dir=tmp_path / "corpus", artifacts_dir=tmp_path / "artifacts")
     video = Video(
         video_id="L21_V001",
@@ -16,7 +21,6 @@ def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
         duration_ms=2000,
         fps=25.0,
     )
-    calls: list[str] = []
 
     monkeypatch.setattr(build_module, "scan_corpus", lambda _: [video])
     monkeypatch.setattr(
@@ -49,12 +53,18 @@ def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
                 kf_idx=0,
                 frame_idx=0,
                 ts_ms=1500,
-                path=f"follow_frames/L21_V001/g{args[6]}/000000_000_000.jpg",
+                path=f"follow_frames/L21_V001/g{args[6]}/000000_000_000.webp",
                 generation=args[6],
             )
         ]
 
     monkeypatch.setattr(build_module, "extract_follow_frames", fake_follow)
+    return cfg
+
+
+def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    cfg = _patch_pipeline(tmp_path, monkeypatch, calls)
 
     first = build_module.build(cfg)
     assert (first.videos, first.shots, first.keyframes, first.failed) == (1, 1, 1, 0)
@@ -78,3 +88,31 @@ def test_build_resumes_and_reindexes(tmp_path, monkeypatch) -> None:
             "follow_frames": 1,
             "asr_segments": 0,
         }
+
+
+def test_partial_reindex_reruns_in_current_generation(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    cfg = _patch_pipeline(tmp_path, monkeypatch, calls)
+    build_module.build(cfg)
+    calls.clear()
+
+    report = build_module.build(cfg, steps=["follow"], reindex=True)
+
+    assert (report.follow_frames, report.skipped, report.failed) == (1, 0, 0)
+    assert calls == ["follow"]
+    with closing(connect(cfg.db_path)) as conn:
+        assert current_generation(conn, "L21_V001") == 0
+        stats = get_stats(conn)
+        assert (stats["shots"], stats["keyframes"], stats["follow_frames"]) == (1, 1, 1)
+
+
+def test_follow_without_keyframes_fails_loudly(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    cfg = _patch_pipeline(tmp_path, monkeypatch, calls)
+
+    report = build_module.build(cfg, steps=["follow"])
+
+    assert (report.follow_frames, report.failed, report.skipped) == (0, 1, 0)
+    assert "no shots/keyframes" in report.errors[0]
+    with closing(connect(cfg.db_path)) as conn:
+        assert get_index_status(conn, "L21_V001", 0, "follow") == "failed"

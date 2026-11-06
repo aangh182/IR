@@ -44,8 +44,11 @@ uv run ir index --limit 3          # thử 3 video đầu
 uv run ir index                    # toàn bộ corpus trong config
 uv run ir index --only shots       # chỉ detect shot
 uv run ir index --reindex          # tạo generation mới rồi compact bản cũ
+uv run ir index --only follow --reindex  # chạy lại follow frames tại generation hiện tại
 uv run ir stats
 ```
+
+`--reindex` chỉ tạo generation mới khi chạy đủ 3 bước (shots + keyframes + follow). Khi đi kèm `--only`, bước được chọn sẽ chạy lại ngay trong generation hiện tại, không đụng tới keyframe/embedding hay generation cũ.
 
 Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
 
@@ -106,12 +109,17 @@ Follow frames: sau mỗi keyframe, extract thêm các frame kế tiếp **trong 
 ```yaml
 keyframe:
   follow:
-    step_sec: 0.5     # khoảng cách giữa các frame
-    max_frames: 8     # tối đa mỗi keyframe
-    window_sec: 1.0   # độ dài interval quanh frame khi chọn
+    step_sec: 0.5       # khoảng cách giữa các frame
+    max_frames: 8       # tối đa mỗi keyframe
+    window_sec: 1.0     # độ dài interval quanh frame khi chọn
+    short_side: 320     # cạnh ngắn của ảnh (keyframe chính vẫn 448)
+    quality: 75         # quality của WebP/JPEG
+    image_format: webp  # webp | jpeg
 ```
 
-Ảnh lưu ở `artifacts/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.jpg`, metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
+Ảnh lưu ở `artifacts/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.webp` (hoặc `.jpg` nếu `image_format: jpeg`), metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
+
+Follow frames chỉ dùng để hiển thị/chọn frame trên UI nên được lưu nhỏ hơn keyframe: WebP 320px quality 75 giảm khoảng 4x dung lượng (≈79 KB → ≈20 KB mỗi ảnh). Chạy `uv run ir index --only follow --reindex` để sinh lại ảnh cũ theo cấu hình mới.
 
 Lưu ý:
 

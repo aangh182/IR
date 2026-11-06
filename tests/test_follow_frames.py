@@ -4,6 +4,7 @@ from pathlib import Path
 
 import av
 import numpy as np
+from PIL import Image
 
 from ir.config import FollowConfig, KeyframeConfig
 from ir.ingest.follow import extract_follow_frames, follow_requests
@@ -54,7 +55,7 @@ def test_extracts_follow_frames_after_keyframe(tmp_path) -> None:
     shots = [Shot(video_id="sample", shot_idx=0, start_ms=0, end_ms=2000)]
     cfg = KeyframeConfig(
         short_side=32,
-        follow=FollowConfig(step_sec=0.25, max_frames=8),
+        follow=FollowConfig(step_sec=0.25, max_frames=8, short_side=32),
     )
 
     frames = extract_follow_frames(
@@ -69,5 +70,10 @@ def test_extracts_follow_frames_after_keyframe(tmp_path) -> None:
         assert frame.generation == 1
         assert frame.frame_idx < 3
         assert frame.path.startswith("follow_frames/sample/g1/")
+        assert frame.path.endswith(".webp")
         assert (tmp_path / frame.path).exists()
     assert [frame.frame_idx for frame in frames] == [0, 1, 2]
+
+    with Image.open(tmp_path / frames[0].path) as image:
+        assert image.format == "WEBP"
+        assert min(image.size) == 32

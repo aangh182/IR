@@ -26,17 +26,23 @@ def frame_time_ms(frame, stream) -> int:
     return 0
 
 
-def save_frame_image(rgb: np.ndarray, path: Path, cfg: KeyframeConfig) -> None:
+def save_frame_image(
+    rgb: np.ndarray,
+    path: Path,
+    short_side: int,
+    quality: int,
+    image_format: str = "JPEG",
+) -> None:
     image = Image.fromarray(rgb)
     width, height = image.size
-    scale = cfg.short_side / min(width, height)
+    scale = short_side / min(width, height)
     if scale < 1:
         image = image.resize(
             (max(1, round(width * scale)), max(1, round(height * scale))),
             Image.Resampling.LANCZOS,
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, format="JPEG", quality=cfg.jpeg_quality)
+    image.save(path, format=image_format, quality=quality)
 
 
 def _write_frame(
@@ -48,7 +54,7 @@ def _write_frame(
     cfg: KeyframeConfig,
 ) -> str:
     path = video_dir / f"{shot_idx:06d}_{kf_idx:03d}.jpg"
-    save_frame_image(rgb, path, cfg)
+    save_frame_image(rgb, path, cfg.short_side, cfg.jpeg_quality)
     return path.relative_to(artifacts_dir).as_posix()
 
 

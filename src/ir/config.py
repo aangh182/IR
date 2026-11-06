@@ -28,6 +28,9 @@ class FollowConfig(BaseModel):
     step_sec: float = 0.5
     max_frames: int = 8
     window_sec: float = 1.0
+    short_side: int = 320
+    quality: int = 75
+    image_format: Literal["webp", "jpeg"] = "webp"
 
 
 class KeyframeConfig(BaseModel):
