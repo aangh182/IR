@@ -176,7 +176,7 @@ function App() {
 
         {health && !indexReady && (
           <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-            Chưa thấy embedding artifacts. Chạy notebook Kaggle rồi giải nén vào `artifacts/` để bật search.
+            Chưa thấy embedding artifacts. Chạy notebook Kaggle rồi `uv run ir import-shards &lt;zip&gt;` để bật search.
           </p>
         )}
 

@@ -30,6 +30,7 @@ from ..store.db import (
     upsert_video,
 )
 from ..types import Shot, Video
+from .manifest import write_keyframe_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ def build(
                 report.failed += 1
                 report.errors.append(f"{video.video_id}: {exc}")
                 logger.exception("failed to index %s", video.video_id)
+        write_keyframe_manifest(cfg, conn)
     return report
 
 
@@ -177,7 +179,7 @@ def _process_video(
                 keyframes,
                 shots,
                 cfg.keyframe,
-                cfg.artifacts_dir,
+                cfg.state_root,
                 generation,
             )
             for follow_frame in follow_frames:

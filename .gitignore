@@ -4,7 +4,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 artifacts/
+artifacts_state/
 artifacts_pyscene/
+state/
+artifacts_keyframes.zip
+artifacts_embed_shards.zip
 models/
 web/node_modules/
 web/dist/

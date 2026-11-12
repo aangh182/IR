@@ -44,7 +44,7 @@ def _config(tmp_path: Path) -> AppConfig:
 
 def test_merge_shards_builds_combined_index(tmp_path) -> None:
     cfg = _config(tmp_path)
-    shards = cfg.artifacts_dir / "artifacts_embed" / "shards"
+    shards = cfg.shards_dir
     _write_shard(
         shards / "V1",
         "V1",
@@ -61,7 +61,7 @@ def test_merge_shards_builds_combined_index(tmp_path) -> None:
     report = merge_shards(cfg, shards_dir=shards)
 
     assert (report.videos, report.keyframes) == (2, 4)
-    assert report.output_dir == cfg.artifacts_dir / "artifacts_embed"
+    assert report.output_dir == cfg.embeddings_dir
 
     store = FaissStore.load(cfg)
     assert store.count == 4

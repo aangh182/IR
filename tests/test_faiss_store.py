@@ -12,22 +12,24 @@ from ir.store.faiss_store import FaissStore, IndexUnavailableError
 
 
 def _write_artifacts(root: Path, vectors: np.ndarray, ids: np.ndarray) -> AppConfig:
-    root.mkdir(parents=True, exist_ok=True)
+    cfg = AppConfig(artifacts_dir=root)
+    target = cfg.embeddings_dir
+    target.mkdir(parents=True, exist_ok=True)
     vectors = np.ascontiguousarray(vectors, dtype=np.float32)
     faiss.normalize_L2(vectors)
 
-    np.save(root / "embeddings.f16.npy", vectors.astype(np.float16))
-    np.save(root / "id_map.npy", ids.astype(np.int64))
+    np.save(target / "embeddings.f16.npy", vectors.astype(np.float16))
+    np.save(target / "id_map.npy", ids.astype(np.int64))
 
     index = faiss.IndexFlatIP(vectors.shape[1])
     index.add(vectors)
-    faiss.write_index(index, str(root / "faiss.index"))
+    faiss.write_index(index, str(target / "faiss.index"))
 
-    (root / "manifest.json").write_text(
+    (target / "manifest.json").write_text(
         json.dumps({"model": "test-model", "count": len(ids), "dim": vectors.shape[1]}),
         encoding="utf-8",
     )
-    return AppConfig(artifacts_dir=root)
+    return cfg
 
 
 def test_load_and_search(tmp_path) -> None:

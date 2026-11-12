@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import zipfile
 from contextlib import closing
 from pathlib import Path
 from typing import Annotated
@@ -82,9 +83,64 @@ def merge(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}"
-    )
+    typer.echo(f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}")
+
+
+@app.command("export-keyframes")
+def export_keyframes(
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="File zip đầu ra; mặc định cạnh artifacts/."),
+    ] = None,
+) -> None:
+    from .kaggle import export_keyframes as run_export
+
+    cfg = load_config()
+    target = output or cfg.artifacts_dir.parent / "artifacts_keyframes.zip"
+    try:
+        path, files = run_export(cfg, target)
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"keyframes={files} -> {path}")
+
+
+@app.command("import-shards")
+def import_shards(
+    source: Annotated[
+        Path, typer.Argument(help="File zip shard tải từ Kaggle, hoặc thư mục đã giải nén.")
+    ],
+    merge: Annotated[
+        bool, typer.Option("--merge/--no-merge", help="Merge ngay sau khi giải nén.")
+    ] = True,
+) -> None:
+    from .kaggle import import_shards as run_import
+
+    if not source.exists():
+        typer.echo(f"Không thấy: {source}", err=True)
+        raise typer.Exit(code=1)
+
+    cfg = load_config()
+    try:
+        report = run_import(cfg, source, merge)
+    except (FileNotFoundError, ValueError, zipfile.BadZipFile) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if report is None:
+        typer.echo(f"shards -> {cfg.shards_dir}")
+        return
+    typer.echo(f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}")
+
+
+@app.command()
+def migrate() -> None:
+    from .migrate import migrate_layout
+
+    cfg = load_config()
+    for message in migrate_layout(cfg):
+        typer.echo(message)
 
 
 @app.command()

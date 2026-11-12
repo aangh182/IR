@@ -58,22 +58,53 @@ Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
   Đặt `0` để tắt.
 - `shot.min_shot_sec`: thời lượng shot tối thiểu.
 
+## Layout artifacts
+
+`artifacts/` là **bundle duy nhất để upload Kaggle**, chỉ gồm keyframe và manifest:
+
+```
+artifacts/
+  keyframes/<video_id>/g<generation>/<shot>_<kf>.jpg
+  manifest.jsonl        # kf_uid, video_id, generation, shot_idx, kf_idx, ts_ms, path
+```
+
+Toàn bộ state local nằm trong `state/` (không upload):
+
+```
+state/
+  metadata.sqlite
+  follow_frames/<video_id>/g<generation>/*.webp
+  embed/
+    shards/<video_id>/...
+    embeddings.f16.npy
+    id_map.npy
+    faiss.index
+    manifest.json
+```
+
+Repo cũ đang để DB/follow/embed trong `artifacts/`; chạy một lần `uv run ir migrate` để chuyển sang layout mới (không cần chạy lại keyframe).
+
 ## Embedding (Kaggle)
 
-`scripts/kaggle_embed.ipynb` là notebook self-contained, xuất **mỗi video một shard** để chạy Kaggle theo nhiều batch.
+`scripts/kaggle_embed.ipynb` là notebook self-contained, xuất **mỗi video một shard** để chạy Kaggle theo nhiều batch. Notebook đọc `manifest.jsonl`, không cần SQLite.
 
-1. Upload `artifacts/` (`metadata.sqlite` + `keyframes/`) thành Kaggle Dataset; bật GPU + Internet.
+1. Tạo bundle keyframe rồi upload thành Kaggle Dataset; bật GPU + Internet:
+
+```bash
+uv run ir export-keyframes          # -> artifacts_keyframes.zip
+```
+
 2. Chọn batch bằng env:
    - mặc định: tất cả video;
    - `EMBED_VIDEO_OFFSET` + `EMBED_VIDEO_LIMIT` (ví dụ 0/100, 100/100, ...);
    - hoặc `EMBED_VIDEO_IDS=L01_V001,L01_V002`.
-3. Tải `artifacts_embed_shards.zip`, giải nén vào `artifacts/artifacts_embed/` để có `artifacts/artifacts_embed/shards/<video_id>/`.
-4. Merge ở local:
+3. Tải `artifacts_embed_shards.zip` về máy rồi import:
 
 ```bash
-uv run ir merge
-uv run ir merge --shards artifacts/artifacts_embed/shards --output artifacts/artifacts_embed
+uv run ir import-shards artifacts_embed_shards.zip
 ```
+
+Lệnh này giải nén vào `state/embed/shards/<video_id>/` và merge luôn. Nếu chỉ muốn giải nén: `uv run ir import-shards <zip> --no-merge`. Merge lại thủ công: `uv run ir merge`.
 
 `ir merge` đọc toàn bộ shard hiện có và build `embeddings.f16.npy`, `id_map.npy`, `faiss.index`, `manifest.json`. Có thể merge sau mỗi batch.
 
@@ -117,14 +148,15 @@ keyframe:
     image_format: webp  # webp | jpeg
 ```
 
-Ảnh lưu ở `artifacts/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.webp` (hoặc `.jpg` nếu `image_format: jpeg`), metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
+Ảnh lưu ở `state/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.webp` (hoặc `.jpg` nếu `image_format: jpeg`), metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
 
 Follow frames chỉ dùng để hiển thị/chọn frame trên UI nên được lưu nhỏ hơn keyframe: WebP 320px quality 75 giảm khoảng 4x dung lượng (≈79 KB → ≈20 KB mỗi ảnh). Chạy `uv run ir index --only follow --reindex` để sinh lại ảnh cũ theo cấu hình mới.
 
 Lưu ý:
 
 - Artifacts hiện tại đã sinh bằng PySceneDetect; dùng `uv run ir index --reindex` nếu muốn tạo generation mới.
-- Embedding lấy từ notebook Kaggle, giải nén vào `artifacts/` hoặc `artifacts/artifacts_embed/`.
+- Embedding lấy từ notebook Kaggle, import bằng `uv run ir import-shards <zip>`.
+- `uv run ir export-keyframes` luôn ghi lại `artifacts/manifest.jsonl` từ DB trước khi zip.
 
 ## Kiểm tra
 
@@ -135,4 +167,4 @@ uv run ruff check .
 
 ## Cấu trúc
 
-`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite + FAISS), `search` (CLIP encoder + search service), `api` (FastAPI), `cli`; `web/` là Vite React UI; `scripts/kaggle_embed.ipynb` là notebook embed trên Kaggle; `artifacts/` chứa DB, embeddings, FAISS index và keyframe (gitignored).
+`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite + FAISS), `search` (CLIP encoder + search service), `api` (FastAPI), `cli`; `web/` là Vite React UI; `scripts/kaggle_embed.ipynb` là notebook embed trên Kaggle. `artifacts/` chỉ chứa keyframe + `manifest.jsonl` để upload Kaggle; `state/` chứa DB, follow frames, embeddings và FAISS index (cả hai đều gitignored).

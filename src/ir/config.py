@@ -110,6 +110,7 @@ class ApiConfig(BaseModel):
 class AppConfig(BaseModel):
     corpus_dir: Path = Path("minibatch")
     artifacts_dir: Path = Path("artifacts")
+    state_dir: Path | None = None
     shot: ShotConfig = Field(default_factory=ShotConfig)
     keyframe: KeyframeConfig = Field(default_factory=KeyframeConfig)
     embed: EmbedConfig = Field(default_factory=EmbedConfig)
@@ -122,23 +123,30 @@ class AppConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
 
     @property
+    def state_root(self) -> Path:
+        if self.state_dir is not None:
+            return self.state_dir
+        return self.artifacts_dir.parent / f"{self.artifacts_dir.name}_state"
+
+    @property
     def db_path(self) -> Path:
-        return self.artifacts_dir / "metadata.sqlite"
+        return self.state_root / "metadata.sqlite"
 
     @property
     def keyframes_dir(self) -> Path:
         return self.artifacts_dir / "keyframes"
 
     @property
+    def keyframes_manifest_path(self) -> Path:
+        return self.artifacts_dir / "manifest.jsonl"
+
+    @property
     def follow_frames_dir(self) -> Path:
-        return self.artifacts_dir / "follow_frames"
+        return self.state_root / "follow_frames"
 
     @property
     def embeddings_dir(self) -> Path:
-        nested = self.artifacts_dir / "artifacts_embed"
-        if (nested / "manifest.json").is_file():
-            return nested
-        return self.artifacts_dir
+        return self.state_root / "embed"
 
     @property
     def embeddings_path(self) -> Path:
@@ -158,10 +166,7 @@ class AppConfig(BaseModel):
 
     @property
     def shards_dir(self) -> Path:
-        nested = self.artifacts_dir / "artifacts_embed" / "shards"
-        if nested.is_dir():
-            return nested
-        return self.artifacts_dir / "shards"
+        return self.embeddings_dir / "shards"
 
 
 def _resolve(base: Path, value: str | Path) -> Path:
@@ -175,4 +180,6 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     base = source.parent
     data["corpus_dir"] = _resolve(base, data.get("corpus_dir", "minibatch"))
     data["artifacts_dir"] = _resolve(base, data.get("artifacts_dir", "artifacts"))
+    if data.get("state_dir"):
+        data["state_dir"] = _resolve(base, data["state_dir"])
     return AppConfig.model_validate(data)
