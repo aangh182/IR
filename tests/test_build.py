@@ -26,22 +26,26 @@ def _patch_pipeline(tmp_path, monkeypatch, calls: list[str]) -> AppConfig:
     monkeypatch.setattr(
         build_module,
         "detect_shots",
-        lambda *args, **kwargs: calls.append("shots")
-        or [Shot(video_id="L21_V001", shot_idx=0, start_ms=0, end_ms=2000)],
+        lambda *args, **kwargs: (
+            calls.append("shots")
+            or [Shot(video_id="L21_V001", shot_idx=0, start_ms=0, end_ms=2000)]
+        ),
     )
     monkeypatch.setattr(
         build_module,
         "extract_keyframes",
-        lambda *args, **kwargs: calls.append("keyframes")
-        or [
-            Keyframe(
-                video_id="L21_V001",
-                shot_idx=0,
-                kf_idx=0,
-                ts_ms=1000,
-                path="keyframes/L21_V001/g0/000000_000.jpg",
-            )
-        ],
+        lambda *args, **kwargs: (
+            calls.append("keyframes")
+            or [
+                Keyframe(
+                    video_id="L21_V001",
+                    shot_idx=0,
+                    kf_idx=0,
+                    ts_ms=1000,
+                    path="keyframes/L21_V001/g0/000000_000.jpg",
+                )
+            ]
+        ),
     )
 
     def fake_follow(*args, **kwargs):
@@ -106,6 +110,19 @@ def test_partial_reindex_reruns_in_current_generation(tmp_path, monkeypatch) -> 
         assert (stats["shots"], stats["keyframes"], stats["follow_frames"]) == (1, 1, 1)
 
 
+def test_follow_skips_when_keyframe_step_produced_none(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    cfg = _patch_pipeline(tmp_path, monkeypatch, calls)
+    monkeypatch.setattr(build_module, "extract_keyframes", lambda *args, **kwargs: [])
+
+    build_module.build(cfg, steps=["shots", "keyframes"])
+    report = build_module.build(cfg, steps=["follow"])
+
+    assert (report.follow_frames, report.failed, report.skipped) == (0, 0, 0)
+    with closing(connect(cfg.db_path)) as conn:
+        assert get_index_status(conn, "L21_V001", 0, "follow") == "done"
+
+
 def test_follow_without_keyframes_fails_loudly(tmp_path, monkeypatch) -> None:
     calls: list[str] = []
     cfg = _patch_pipeline(tmp_path, monkeypatch, calls)
@@ -113,6 +130,6 @@ def test_follow_without_keyframes_fails_loudly(tmp_path, monkeypatch) -> None:
     report = build_module.build(cfg, steps=["follow"])
 
     assert (report.follow_frames, report.failed, report.skipped) == (0, 1, 0)
-    assert "no shots/keyframes" in report.errors[0]
+    assert "no shots" in report.errors[0]
     with closing(connect(cfg.db_path)) as conn:
         assert get_index_status(conn, "L21_V001", 0, "follow") == "failed"

@@ -166,26 +166,33 @@ def _process_video(
         set_index_status(conn, video.video_id, generation, "follow", "running")
         try:
             keyframes = load_keyframes(conn, video.video_id, generation)
-            if not keyframes or not shots:
-                raise RuntimeError("no shots/keyframes available for follow frame extraction")
-            delete_follow_frames(conn, video.video_id, generation)
-            shutil.rmtree(
-                cfg.follow_frames_dir / video.video_id / f"g{generation}", ignore_errors=True
-            )
+            if not shots:
+                raise RuntimeError("no shots available for follow frame extraction")
             count = 0
-            follow_frames = extract_follow_frames(
-                video.path,
-                video.video_id,
-                keyframes,
-                shots,
-                cfg.keyframe,
-                cfg.state_root,
-                generation,
-            )
-            for follow_frame in follow_frames:
-                insert_follow_frame(conn, follow_frame)
-            count = len(follow_frames)
-            report.follow_frames += count
+            if not keyframes:
+                if not step_done(conn, video.video_id, generation, "keyframes"):
+                    raise RuntimeError("no keyframes available for follow frame extraction")
+                logger.warning("%s: no keyframes, skipping follow", video.video_id)
+            else:
+                delete_follow_frames(conn, video.video_id, generation)
+                shutil.rmtree(
+                    cfg.follow_frames_dir / video.video_id / f"g{generation}",
+                    ignore_errors=True,
+                )
+                follow_frames = extract_follow_frames(
+                    video.path,
+                    video.video_id,
+                    keyframes,
+                    shots,
+                    cfg.keyframe,
+                    cfg.state_root,
+                    generation,
+                    keyframe_root=cfg.artifacts_dir,
+                )
+                for follow_frame in follow_frames:
+                    insert_follow_frame(conn, follow_frame)
+                count = len(follow_frames)
+                report.follow_frames += count
             set_index_status(conn, video.video_id, generation, "follow", "done")
         except Exception as exc:
             set_index_status(conn, video.video_id, generation, "follow", "failed", str(exc))

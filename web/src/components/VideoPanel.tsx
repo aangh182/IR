@@ -40,12 +40,18 @@ export function VideoPanel({ hit }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [copied, setCopied] = useState(false)
   const [videoError, setVideoError] = useState(false)
-  const [activeIdx, setActiveIdx] = useState(0)
+  const [activeIdx, setActiveIdx] = useState<number | null>(null)
 
   const frames = framesOf(hit)
-  const activeIndex = Math.min(activeIdx, frames.length - 1)
+  const keyframeIdx = Math.max(
+    0,
+    frames.findIndex((frame) => frame.is_keyframe),
+  )
+  const activeIndex = Math.min(activeIdx ?? keyframeIdx, frames.length - 1)
   const active = frames[activeIndex]
-  const offsetMs = active.ts_ms - frames[0].ts_ms
+  const offsetMs = active.ts_ms - frames[keyframeIdx].ts_ms
+  const offsetLabel =
+    offsetMs === 0 ? 'keyframe' : `${offsetMs > 0 ? '+' : ''}${offsetMs} ms`
 
   const payload = dresPayload(hit, active)
 
@@ -85,8 +91,7 @@ export function VideoPanel({ hit }: Props) {
         <div className="flex items-center justify-between text-xs text-slate-500">
           <span>{frames.length} frame</span>
           <span className="font-mono">
-            {activeIndex + 1}/{frames.length}
-            {offsetMs > 0 ? ` · +${offsetMs} ms` : ' · keyframe'}
+            {activeIndex + 1}/{frames.length} · {offsetLabel}
           </span>
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1">

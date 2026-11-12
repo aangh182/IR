@@ -4,21 +4,21 @@ state_dir: state
 
 shot:
   pyscenedetect_threshold: 27.0
-  pyscenedetect_burst_merge_sec: 1.5
+  pyscenedetect_burst_merge_sec: 0.0
   min_shot_sec: 0.5
 
 keyframe:
   short_side: 448
   jpeg_quality: 90
-  long_shot_sec: 10.0
-  every_sec: 5.0
-  max_per_shot: 5
+  every_sec: 4.0
+  candidate_step_sec: 0.25
+  min_gap_sec: 1.0
   filter:
-    min_sharpness: 120.0
     min_std: 8.0
     min_brightness: 20.0
     max_brightness: 235.0
     duplicate_distance: 5
+    metric_width: 320
   follow:
     step_sec: 0.5
     max_frames: 8
@@ -26,6 +26,7 @@ keyframe:
     short_side: 320
     quality: 75
     image_format: webp
+    bidirectional: true
 
 embed:
   model: sentence-transformers/clip-ViT-B-16

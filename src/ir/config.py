@@ -17,11 +17,11 @@ class ShotConfig(BaseModel):
 
 
 class KeyframeFilterConfig(BaseModel):
-    min_sharpness: float = 120.0
     min_std: float = 8.0
     min_brightness: float = 20.0
     max_brightness: float = 235.0
     duplicate_distance: int = 5
+    metric_width: int = 320
 
 
 class FollowConfig(BaseModel):
@@ -31,14 +31,15 @@ class FollowConfig(BaseModel):
     short_side: int = 320
     quality: int = 75
     image_format: Literal["webp", "jpeg"] = "webp"
+    bidirectional: bool = True
 
 
 class KeyframeConfig(BaseModel):
     short_side: int = 448
     jpeg_quality: int = 90
-    long_shot_sec: float = 10.0
-    every_sec: float = 5.0
-    max_per_shot: int = 5
+    every_sec: float = 4.0
+    candidate_step_sec: float = 0.25
+    min_gap_sec: float = 1.0
     filter: KeyframeFilterConfig = Field(default_factory=KeyframeFilterConfig)
     follow: FollowConfig = Field(default_factory=FollowConfig)
 

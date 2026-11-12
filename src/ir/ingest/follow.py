@@ -4,10 +4,12 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 import av
+import numpy as np
+from PIL import Image
 
 from ..config import FollowConfig, KeyframeConfig
 from ..types import FollowFrame, Keyframe, Shot
-from .junk import dhash, hamming
+from .junk import dhash_gray, hamming, to_gray
 from .keyframes import frame_time_ms, save_frame_image
 from .sampling import follow_timestamps
 
@@ -23,10 +25,25 @@ def follow_requests(
         shot = shots_by_idx.get(keyframe.shot_idx)
         if shot is None:
             continue
-        for timestamp in follow_timestamps(keyframe.ts_ms, shot.end_ms, cfg):
+        for timestamp in follow_timestamps(keyframe.ts_ms, shot.start_ms, shot.end_ms, cfg):
             requests.append((timestamp, keyframe.shot_idx, keyframe.kf_idx))
     requests.sort()
     return requests
+
+
+def _seed_keyframe_hashes(
+    keyframes: list[Keyframe],
+    keyframe_root: Path,
+) -> dict[tuple[int, int], list[int]]:
+    hashes: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for keyframe in keyframes:
+        try:
+            with Image.open(keyframe_root / keyframe.path) as image:
+                gray = to_gray(np.asarray(image.convert("RGB")))
+        except OSError:
+            continue
+        hashes[(keyframe.shot_idx, keyframe.kf_idx)].append(dhash_gray(gray))
+    return hashes
 
 
 def extract_follow_frames(
@@ -37,6 +54,7 @@ def extract_follow_frames(
     cfg: KeyframeConfig,
     artifacts_dir: Path,
     generation: int = 0,
+    keyframe_root: Path | None = None,
 ) -> list[FollowFrame]:
     pending = deque(follow_requests(keyframes, shots, cfg.follow))
     if not pending:
@@ -46,7 +64,7 @@ def extract_follow_frames(
     image_format = cfg.follow.image_format
     suffix = ".webp" if image_format == "webp" else ".jpg"
     extracted: list[FollowFrame] = []
-    hashes: dict[tuple[int, int], list[int]] = defaultdict(list)
+    hashes = _seed_keyframe_hashes(keyframes, keyframe_root or artifacts_dir)
     counts: dict[tuple[int, int], int] = defaultdict(int)
 
     with av.open(video_path) as container:
@@ -59,7 +77,7 @@ def extract_follow_frames(
 
                 rgb = frame.to_ndarray(format="rgb24")
                 group = (shot_idx, kf_idx)
-                fingerprint = dhash(rgb)
+                fingerprint = dhash_gray(to_gray(rgb))
                 if any(
                     hamming(fingerprint, previous) < cfg.filter.duplicate_distance
                     for previous in hashes[group]

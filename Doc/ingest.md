@@ -1,29 +1,32 @@
 # `src/ir/ingest` — Tài liệu chi tiết
 
-Package `ir.ingest` chịu trách nhiệm biến **video gốc** thành dữ liệu ingest:
-`Video → Shot → Keyframe → FollowFrame`, kèm ảnh JPEG/WebP ghi ra đĩa.
+Package `ir.ingest` biến **video gốc** thành dữ liệu ingest:
+`Video → Shot → Segment → Keyframe → FollowFrame`, kèm ảnh JPEG/WebP ghi ra đĩa.
+
+Thiết kế hiện tại ưu tiên **recall**: bỏ burst merge, mỗi shot chia segment 4s và lấy
+frame nét nhất trong từng segment, follow frame hai chiều, không còn fallback ảnh rác.
 
 ```
 video
-  │  scan.py        probe metadata (duration, fps, kích thước, audio)
+  │  scan.py        probe metadata, bỏ file lỗi, chặn video_id trùng
   ▼
 Video
-  │  shots.py       PySceneDetect ContentDetector + gộp burst ngắn
+  │  shots.py       PySceneDetect ContentDetector (+ compact shot < min_shot_sec)
   ▼
 Shot[]
-  │  sampling.py    chọn timestamp keyframe trong mỗi shot
-  │  junk.py        lọc frame rác + dHash chống trùng
-  │  keyframes.py   decode + ghi ảnh keyframe
+  │  sampling.py    chia shot thành segment ceil(length / every_sec)
+  │  junk.py        hard-junk (std/brightness) + sharpness ranking + dHash
+  │  keyframes.py   quét ứng viên trong segment, chọn frame nét nhất
   ▼
 Keyframe[]
-  │  sampling.py    chọn timestamp follow frame sau keyframe
-  │  follow.py      decode + ghi ảnh follow frame
+  │  sampling.py    timestamp follow hai chiều quanh keyframe
+  │  follow.py      decode + ghi follow frame, seed hash keyframe
   ▼
 FollowFrame[]
 ```
 
-Orchestrator là `src/ir/index/build.py` (không nằm trong package này) gọi lần lượt
-các hàm trên và ghi kết quả vào SQLite.
+Orchestrator là `src/ir/index/build.py` (không thuộc package) gọi lần lượt các hàm
+trên và ghi kết quả vào SQLite.
 
 ---
 
@@ -31,15 +34,15 @@ các hàm trên và ghi kết quả vào SQLite.
 
 | File | Vai trò |
 | --- | --- |
-| `__init__.py` | Package rỗng, không export gì. |
-| `scan.py` | Quét thư mục corpus, probe metadata video bằng PyAV. |
-| `shots.py` | Detect shot, chuẩn hoá/gộp shot, gộp burst ngắn. |
-| `sampling.py` | Tính timestamp keyframe và follow frame. |
-| `junk.py` | Đo độ nét/độ sáng, phát hiện frame rác, dHash + Hamming. |
-| `keyframes.py` | Decode video, chọn/ghi ảnh keyframe. |
-| `follow.py` | Decode video, ghi các follow frame sau keyframe. |
+| `__init__.py` | Package rỗng. |
+| `scan.py` | Quét corpus, probe metadata bằng PyAV, bỏ file hỏng. |
+| `shots.py` | Detect shot, chuẩn hoá biên, compact shot ngắn. |
+| `sampling.py` | Chia segment keyframe và sinh timestamp follow hai chiều. |
+| `junk.py` | Hard-junk, sharpness ranking, dHash 9×8. |
+| `keyframes.py` | Quét segment, chọn frame tốt nhất, ghi JPEG. |
+| `follow.py` | Ghi follow frame trước/sau keyframe, chống trùng. |
 
-### Data model liên quan (`src/ir/types.py`)
+### Data model (`src/ir/types.py`)
 
 ```python
 class Video:        video_id, path, duration_ms, fps, width, height, has_audio
@@ -49,11 +52,13 @@ class Keyframe:     video_id, shot_idx, kf_idx, ts_ms, path, kf_uid, generation,
 class FollowFrame:  video_id, shot_idx, kf_idx, frame_idx, ts_ms, path, generation
 ```
 
-`path` của `Keyframe`/`FollowFrame` là đường dẫn **tương đối** so với root tương ứng:
+`path` là đường dẫn tương đối:
 
-- keyframe: `keyframes/<video_id>/g<generation>/<shot>_<kf>.jpg` (root = `artifacts_dir`)
-- follow frame: `follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.<ext>`
-  (root = `state_root`)
+- keyframe: `keyframes/<video_id>/g<generation>/<shot>_<kf>.jpg` (root `artifacts_dir`)
+- follow: `follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.<ext>` (root `state_root`)
+
+`kf_idx` là **chỉ số segment** trong shot, không phải thứ tự ảnh được lưu. Nếu một
+segment bị bỏ (toàn frame junk), `kf_idx` có thể bị khuyết.
 
 ---
 
@@ -65,96 +70,59 @@ class FollowFrame:  video_id, shot_idx, kf_idx, frame_idx, ts_ms, path, generati
 {".mp4", ".mkv", ".avi", ".webm", ".mov", ".m4v"}
 ```
 
-So khớp không phân biệt hoa/thường qua `path.suffix.lower()`.
+So khớp không phân biệt hoa/thường.
 
 ### `_container_duration_ms(container) -> int`
 
-Lấy thời lượng theo thứ tự ưu tiên:
-
 1. `container.duration` (micro-giây) → ms;
 2. `video_stream.duration * time_base` → ms;
-3. trả `0` nếu không xác định được.
+3. `0`.
 
 ### `probe_video(path) -> Video`
 
-- Mở video bằng `av.open`.
-- Lấy stream video đầu tiên; nếu không có → `ValueError("no video stream: ...")`.
-- `video_id = path.stem` (tên file không đuôi).
-- `path` lưu dạng chuỗi như được truyền vào.
-- `fps = float(average_rate)` nếu có, ngược lại `None`.
+- Mở bằng `av.open`, lấy stream video đầu tiên; không có → `ValueError`.
+- `video_id = path.stem`.
+- `fps = float(average_rate)` nếu có.
 - `has_audio = any(stream.type == "audio")`.
 
 ### `scan_corpus(corpus_dir) -> list[Video]`
 
-- `rglob("*")` toàn bộ thư mục con.
-- Giữ file có đuôi thuộc `VIDEO_EXTENSIONS`.
-- Sắp xếp theo đường dẫn (ổn định, dễ resume/tái lập).
-- Probe từng file; **một video lỗi sẽ raise** và làm hỏng cả lần scan
-  (orchestrator bọc từng video, nhưng lỗi ở bước scan là lỗi toàn cục).
+- `rglob("*")`, lọc đuôi video, sort theo đường dẫn.
+- **Bọc try/except từng file**: file hỏng bị log warning và bỏ qua, không làm chết
+  cả lần scan.
+- **Chặn `video_id` trùng**: hai file cùng stem (khác thư mục) → `ValueError`, vì
+  `video_id` là khóa chính trong DB.
 
 ---
 
 ## 3. `shots.py`
 
-### Kiểu dữ liệu
-
-```python
-Scene = tuple[int, int, float | None]   # start_frame, end_frame, score
-```
-
-### `_frame_to_ms(frame, fps) -> int`
-
-`round(frame * 1000 / fps)`. Nếu `fps` không hợp lệ, `build_shots` thay bằng `25.0`.
-
 ### `build_shots(video_id, scenes, fps, duration_ms, min_shot_sec) -> list[Shot]`
 
-Chuẩn hoá scene list thô (frame-based) thành shot (ms-based):
+1. `duration_ms <= 0` → `[]`.
+2. Scene `(start_frame, end_frame, score)` → ms:
+   - `start = clamp(round(start_frame * 1000 / fps))`
+   - `end = clamp(round((end_frame + 1) * 1000 / fps))`
+   - bỏ scene rỗng.
+3. Không còn scene → một shot phủ toàn video.
+4. Sort, gộp scene chồng lấn.
+5. **Compact** shot ngắn hơn `min_shot_sec` (mặc định 0.5s) vào shot trước,
+   giữ `scene_score` lớn nhất. Đây là ngưỡng sàn, khác với burst merge.
+6. Chuẩn hoá biên: shot đầu `start = 0`, lấp chỗ hở bằng cách kéo `end` shot trước,
+   shot cuối `end = duration_ms`.
+7. Đánh lại `shot_idx`.
 
-1. `duration_ms <= 0` → trả `[]`.
-2. Mỗi scene → `[start_ms, end_ms, score]`:
-   - `start_ms = clamp(_frame_to_ms(start_frame), 0, duration)`
-   - `end_ms = clamp(_frame_to_ms(end_frame + 1), 0, duration)`
-   - bỏ scene có `end <= start`.
-3. Không còn scene nào → **một shot duy nhất** phủ toàn video
-   `Shot(shot_idx=0, start=0, end=duration)`.
-4. Sort theo `start`; gộp scene chồng lấn (dịch `start` lên bằng `end` của scene trước).
-5. **Compact shot ngắn** (`end - start < min_shot_sec`):
-   - nối vào shot trước bằng cách kéo `end` của shot trước;
-   - giữ `scene_score` lớn nhất khi gộp;
-   - nếu shot đầu tiên quá ngắn và còn shot khác: đẩy `start` của shot kế về đầu shot đầu rồi bỏ shot đầu.
-6. Chuẩn hoá biên:
-   - shot đầu `start = 0`;
-   - chỗ hở giữa hai shot được lấp bằng cách kéo `end` shot trước tới `start` shot sau;
-   - shot cuối `end = duration_ms`.
-7. Đánh lại `shot_idx = 0..n-1`, bỏ shot rỗng.
-
-`scene_score` chỉ được giữ khi scene gốc có score (hiện `ContentDetector` trả `None`).
+`scene_score` hiện luôn `None` vì `ContentDetector` không trả score.
 
 ### `merge_short_bursts(shots, min_ms) -> list[Shot]`
 
-Gộp các **cụm ≥ 2 shot ngắn liên tiếp** (card chuyển cảnh, transition, cảnh rung)
-thành một shot. Shot ngắn **đơn lẻ** được giữ nguyên.
+Gộp cụm **≥ 2 shot ngắn liên tiếp** thành một shot; shot ngắn đơn lẻ được giữ.
+`min_ms <= 0` → trả nguyên input.
 
-- `min_ms <= 0` hoặc `< 2` shot → trả nguyên input.
-- Đánh dấu shot có `end - start < min_ms`.
-- Duyệt các run shot ngắn liên tiếp:
-  - run ≥ 2: nếu có shot trước → kéo `end` shot trước tới cuối run;
-    nếu run ở đầu và còn shot sau → đẩy `start` shot sau về đầu run;
-    nếu cả danh sách đều ngắn → tạo một shot `[đầu run, cuối run]`.
-- Chuẩn hoá biên giống `build_shots` và đánh lại `shot_idx`.
-- `scene_score` bị mất sau bước này (các `Shot` mới không set score).
+**Mặc định đã tắt** (`pyscenedetect_burst_merge_sec: 0.0`) để mỗi cảnh ngắn vẫn có
+keyframe riêng. Hàm vẫn còn để bật lại khi cần giảm shot vụn.
 
-### `_pyscenedetect_scenes(video_path, cfg) -> list[Scene]`
-
-Import lazy `scenedetect` (chỉ cần khi chạy detect):
-
-```python
-ContentDetector(threshold=cfg.pyscenedetect_threshold)
-```
-
-Trả `(start_frame, end_frame - 1, None)` cho từng scene.
-
-### `detect_shots(video_path, video_id, fps, duration_ms, cfg) -> list[Shot]`
+### `detect_shots(...)`
 
 ```python
 scenes = _pyscenedetect_scenes(video_path, cfg)
@@ -166,27 +134,27 @@ return merge_short_bursts(shots, int(cfg.pyscenedetect_burst_merge_sec * 1000))
 
 ## 4. `sampling.py`
 
-### `sample_timestamps(start_ms, end_ms, cfg) -> list[int]`
+### `shot_segments(start_ms, end_ms, cfg) -> list[tuple[int, int]]`
 
-Chọn timestamp cho keyframe trong một shot:
+Chia shot thành các segment đều nhau:
 
-- `start = max(0, start_ms)`, `end = max(start + 1, end_ms)`, `length = end - start`, `mid = start + length // 2`.
-- Nếu `length <= long_shot_sec * 1000` → **một timestamp ở giữa shot**.
-- Shot dài:
-  ```python
-  step  = max(1, int(every_sec * 1000))
-  count = min(max_per_shot, max(1, length // step))
-  ts_i  = start + int((i + 0.5) * length / count)   # i = 0..count-1
-  ```
-  Trả danh sách đã sort và loại trùng.
-- Timestamp luôn nằm **bên trong** shot (offset nửa khoảng), không lấy đúng biên.
+```python
+length = max(1, end - start)
+count  = max(1, ceil(length / (every_sec * 1000)))
+segment_i = (start + length * i // count, start + length * (i + 1) // count)
+```
 
-### `follow_timestamps(ts_ms, shot_end_ms, cfg) -> list[int]`
+- Shot 1s với `every_sec=4` → 1 segment phủ cả shot.
+- Shot 34s → 9 segment.
+- Không cap số segment; shot càng dài càng nhiều keyframe.
+- Mỗi segment là vùng sở hữu của đúng một keyframe, không chồng lấn.
 
-- Bắt đầu từ `ts_ms + step_sec*1000`.
-- Tăng dần theo `step_sec`, chỉ lấy khi `< shot_end_ms`.
-- Dừng khi đạt `max_frames`.
-- Follow frame không bao giờ vượt quá cuối shot hay trùng timestamp keyframe.
+### `follow_timestamps(ts_ms, shot_start_ms, shot_end_ms, cfg) -> list[int]`
+
+- Sinh tối đa `max_frames` timestamp mỗi phía, bước `step_sec`.
+- Nếu `bidirectional=False`, bỏ phía trước.
+- Chọn `max_frames` timestamp **gần keyframe nhất** (hai phía), trả về đã sort.
+- Không lấy timestamp trùng keyframe, không vượt biên shot.
 
 ---
 
@@ -194,38 +162,39 @@ Chọn timestamp cho keyframe trong một shot:
 
 ### `to_gray(rgb) -> ndarray`
 
-`rgb.astype(float32) @ [0.299, 0.587, 0.114]` (ITU-R BT.601).
+`rgb @ [0.299, 0.587, 0.114]` (BT.601).
+
+### `metric_gray(rgb, width) -> ndarray`
+
+- Nếu ảnh rộng hơn `width`, resize **BOX** (area) giữ tỉ lệ.
+- Trả grayscale float.
+- Dùng chung cho hard-junk, sharpness và dHash để giảm chi phí và ổn định scale.
 
 ### `laplacian_variance(gray) -> float`
 
-Xấp xỉ Laplacian 4 hướng bằng `np.roll`, bỏ viền 1 px, trả variance.
-Ảnh `< 3×3` → `0.0`. Giá trị càng thấp càng mờ/ít chi tiết.
+Laplacian 4 hướng bằng `np.roll`, bỏ viền 1px, trả variance.
+**Chỉ dùng để xếp hạng**, không phải cổng chặn cứng. Ảnh `< 3×3` → `0.0`.
 
-### `is_junk(rgb, cfg) -> tuple[bool, float]`
-
-Trả `(is_junk, sharpness)`; `sharpness` luôn được tính và dùng làm điểm dự phòng.
-
-Thứ tự kiểm tra (dừng ở điều kiện đầu tiên đúng):
+### `is_hard_junk(gray, cfg) -> bool`
 
 | Điều kiện | Ý nghĩa |
 | --- | --- |
-| `std < min_std` | ảnh gần như đồng màu |
-| `mean < min_brightness` và `std < 2*min_std` | quá tối và phẳng |
-| `mean > max_brightness` và `std < 2*min_std` | quá sáng/cháy và phẳng |
-| `sharpness < min_sharpness` | quá mờ |
+| `std < min_std` | gần như đồng màu |
+| `mean < min_brightness` và `std < 2*min_std` | tối và phẳng |
+| `mean > max_brightness` và `std < 2*min_std` | sáng/cháy và phẳng |
 
-Ngược lại frame được coi là "tốt".
+Không còn ngưỡng `min_sharpness`: dữ liệu corpus 720p cho thấy gần như 0% frame
+dưới ngưỡng cũ, nên sharpness chỉ dùng để chọn frame tốt nhất.
 
-### `dhash(rgb, size=8) -> int`
+### `dhash_gray(gray, size=8) -> int`
 
-- Chuyển grayscale, sample lưới `size × (size+1)` điểm.
-- So sánh từng cặp ngang `small[:, 1:] > small[:, :-1]`.
-- Đóng gói 64 bit thành một `int` (MSB trước).
-- Dùng để phát hiện frame gần trùng trong cùng shot/nhóm follow.
+- Resize grayscale về `(size+1) × size` bằng `BOX`.
+- So sánh từng cặp ngang, đóng gói 64 bit thành `int`.
+- `dhash(rgb)` là wrapper qua `to_gray`.
 
-### `hamming(a, b) -> int`
+### `hamming(a, b)`
 
-`(a ^ b).bit_count()` — số bit khác nhau giữa hai dHash.
+`(a ^ b).bit_count()`.
 
 ---
 
@@ -233,174 +202,155 @@ Ngược lại frame được coi là "tốt".
 
 ### `frame_time_ms(frame, stream) -> int`
 
-Thời điểm frame theo thứ tự:
-
-1. `frame.time` (giây) → ms;
-2. `frame.pts * stream.time_base` → ms;
+1. `frame.time` → giây, **trừ `stream.start_time * time_base`**;
+2. `frame.pts * time_base` → giây, trừ offset tương tự;
 3. `0`.
 
-### `save_frame_image(rgb, path, short_side, quality, image_format="JPEG")`
+Guard `start_time` cần cho container có start_time ≠ 0; corpus hiện tại start_time = 0.
 
-- `PIL.Image.fromarray(rgb)`.
-- Nếu cạnh ngắn > `short_side`: resize LANCZOS giữ tỉ lệ, cạnh ngắn = `short_side`
-  (không upscale ảnh nhỏ).
-- Tạo thư mục cha, lưu với `format` và `quality`.
-- Dùng chung cho keyframe (JPEG) và follow frame (WEBP/JPEG).
+### `save_frame_image(rgb, path, short_side, quality, image_format)`
 
-### `_write_frame(rgb, video_dir, artifacts_dir, shot_idx, kf_idx, cfg) -> str`
+- Resize LANCZOS nếu cạnh ngắn > `short_side`, không upscale.
+- Lưu JPEG cho keyframe, WebP/JPEG cho follow.
 
-- Tên file: `f"{shot_idx:06d}_{kf_idx:03d}.jpg"` (luôn JPEG cho keyframe).
-- Ghi ảnh bằng `cfg.short_side`, `cfg.jpeg_quality`.
-- Trả path tương đối so với `artifacts_dir` dạng POSIX.
+### `extract_keyframes(...) -> list[Keyframe]`
 
-### `extract_keyframes(video_path, video_id, shots, cfg, artifacts_dir, generation=0) -> list[Keyframe]`
+1. Sinh toàn bộ segment từ `shot_segments`, sort theo thời gian.
+2. Decode tuần tự. Khi timestamp vượt cuối segment hiện tại → **finalize** segment
+   và chuyển sang segment kế.
+3. Trong mỗi segment, quét ứng viên mỗi `candidate_step_sec` (mặc định 0.25s),
+   bắt đầu lệch nửa bước để tránh đúng biên segment.
+4. Với mỗi ứng viên:
+   - tính grayscale tại `metric_width` (320);
+   - nếu `is_hard_junk` → bỏ;
+   - tính sharpness, dHash;
+   - giữ **top 4** frame có sharpness cao nhất trong segment (đủ để thay thế nếu
+     ứng viên tốt nhất bị loại vì trùng/gần keyframe trước).
+5. Finalize segment: duyệt ứng viên theo sharpness giảm dần, chọn frame đầu tiên
+   thỏa:
+   - cách mọi keyframe đã chọn trong cùng shot ≥ `min_gap_sec`;
+   - dHash cách mọi keyframe đó ≥ `duplicate_distance`.
+   Nếu không có ứng viên nào thỏa → **segment không có keyframe** (không fallback).
+6. Ghi ảnh JPEG với `short_side`/`jpeg_quality`; `ts_ms` là timestamp frame thật,
+   `kf_idx` là chỉ số segment.
+7. Log warning nếu số shot có keyframe ít hơn tổng số shot.
 
-1. Với mỗi shot, sinh target `(timestamp, shot_idx, kf_idx, shot.end_ms)` từ
-   `sample_timestamps`, rồi sort toàn bộ theo timestamp. Không có target → `[]`.
-2. Thư mục đích: `<artifacts_dir>/keyframes/<video_id>/g<generation>/`.
-3. Decode tuần tự bằng PyAV (`stream.thread_type = "AUTO"`).
-4. Với mỗi frame:
-   - Nếu đã tới timestamp của target kế tiếp (`pending[0].ts <= frame_ts`):
-     - chuyển shot nếu target thuộc shot khác (`flush` shot cũ trước);
-     - lấy RGB, chấm `is_junk`;
-     - nếu không junk, tính `dhash`; nếu gần trùng một hash đã lưu **trong cùng shot**
-       (`hamming < duplicate_distance`) → coi là junk;
-     - nếu junk: lưu frame có `sharpness` cao nhất làm **fallback** cho shot;
-     - nếu tốt: ghi JPEG, thêm `Keyframe`, tăng số keyframe đã lưu của shot.
-   - Nhiều target cùng rơi vào một frame sẽ được xử lý trong cùng vòng `while`.
-5. Kết thúc video: flush target còn lại để đóng shot cuối.
-6. `flush()` shot:
-   - Nếu shot **chưa lưu keyframe nào** nhưng có fallback → ghi fallback với `kf_idx=0`
-     (frame sắc nét nhất trong số frame bị coi là junk).
-   - Reset state của shot (`best`, `saved`, `hashes`, `shot`).
-7. Nếu `len(keyframes) < len(shots)` → log warning `%d/%d shots produced a keyframe`.
+Điểm quan trọng:
 
-Điểm cần lưu ý:
-
-- Keyframe hợp lệ giữ `kf_idx` của target (do `sample_timestamps` đánh số), nên nếu
-  một target bị junk thì `kf_idx` có thể bị khuyết; fallback luôn dùng `kf_idx = 0`.
-- dHash chống trùng chỉ so trong phạm vi **một shot**.
-- Fallback vẫn có thể là ảnh tối/mờ (vì mọi frame đều junk); mục tiêu là mỗi shot
-  vẫn có ít nhất một ảnh đại diện.
-- Chỉ stream video đầu tiên được dùng.
+- Không còn fallback: frame junk không bao giờ được ghi.
+- Segment không có frame non-junk bị bỏ; với corpus hiện tại tỉ lệ hard-junk ~0.15%
+  nên blind spot rất nhỏ.
+- `min_gap_sec` chống hai segment liền kề chọn hai frame sát nhau ở biên.
+- dHash chỉ so trong cùng shot; dedupe xuyên shot **chưa làm** (xem giới hạn).
 
 ---
 
 ## 7. `follow.py`
 
-### `Request`
+### `follow_requests(keyframes, shots, cfg) -> list[Request]`
 
 ```python
 Request = tuple[int, int, int]   # ts_ms, shot_idx, kf_idx
 ```
 
-### `follow_requests(keyframes, shots, cfg) -> list[Request]`
-
-- Map `shot_idx → Shot`.
-- Với mỗi keyframe, sinh timestamp bằng `follow_timestamps(kf.ts_ms, shot.end_ms, cfg)`.
-- Bỏ keyframe không tìm thấy shot.
+- Với mỗi keyframe, lấy shot tương ứng.
+- Sinh timestamp hai chiều bằng
+  `follow_timestamps(kf.ts_ms, shot.start_ms, shot.end_ms, cfg)`.
 - Sort toàn bộ request theo timestamp.
 
-### `extract_follow_frames(video_path, video_id, keyframes, shots, cfg, artifacts_dir, generation=0) -> list[FollowFrame]`
+### `extract_follow_frames(..., keyframe_root=None) -> list[FollowFrame]`
 
-- `cfg` là `KeyframeConfig`; phần follow lấy từ `cfg.follow`.
-- Không có request → `[]`.
-- Thư mục đích: `<root>/follow_frames/<video_id>/g<generation>/`
-  (`root` là `state_root` khi chạy qua `build`).
-- Đuôi ảnh: `.webp` nếu `image_format == "webp"`, ngược lại `.jpg`.
-- Decode tuần tự, xử lý mọi request có `ts <= frame_ts`:
-  - nhóm theo `(shot_idx, kf_idx)`;
-  - `dhash` + Hamming so với các frame đã lưu **trong cùng nhóm**;
-    nếu trùng (`< duplicate_distance`) → **bỏ qua**;
-  - `frame_idx` tăng dần theo nhóm;
-  - tên file `f"{shot_idx:06d}_{kf_idx:03d}_{frame_idx:03d}{suffix}"`;
-  - lưu ảnh với `follow.short_side`, `follow.quality`, format `WEBP`/`JPEG`;
-  - thêm `FollowFrame` với path tương đối so với `root`.
-- Dừng decode khi hết request.
-
-Khác với keyframe:
-
-- **Không** lọc độ sáng/độ nét (chỉ chống trùng dHash).
-- **Không** có fallback: nhóm có thể ra 0 ảnh nếu mọi frame trùng nhau.
-- Follow frame **không được embed**, chỉ dùng cho UI chọn frame và tính interval.
+- `keyframe_root` mặc định là `artifacts_dir`; `build.py` truyền `cfg.artifacts_dir`
+  vì keyframe nằm trong `artifacts/`, còn follow ghi vào `state/`.
+- **Seed hash**: đọc ảnh keyframe, tính dHash, đưa vào danh sách hash của nhóm
+  `(shot_idx, kf_idx)`. Nhờ vậy frame follow đầu tiên gần trùng keyframe bị bỏ.
+- Decode tuần tự, xử lý request khi timestamp vượt mốc:
+  - tính dHash frame;
+  - nếu Hamming `< duplicate_distance` với hash trong nhóm → bỏ;
+  - nếu không, ghi WebP/JPEG với `follow.short_side`/`follow.quality`;
+  - `frame_idx` tăng dần theo nhóm.
+- Không lọc brightness/sharpness; không fallback; nhóm có thể ra ít hơn `max_frames`.
+- Follow frame **không được embed**.
 
 ---
 
-## 8. Cấu hình liên quan
-
-Nguồn: `src/ir/config.py` và `config.yaml`.
+## 8. Cấu hình
 
 ### `ShotConfig`
 
 | Field | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `pyscenedetect_threshold` | `27.0` | Ngưỡng `ContentDetector`. |
-| `pyscenedetect_burst_merge_sec` | `1.5` | Độ dài tối đa để coi shot là "ngắn" khi gộp burst; `0` = tắt. |
+| `pyscenedetect_burst_merge_sec` | `0.0` | Tắt gộp burst; đặt `1.5` để bật. |
 | `min_shot_sec` | `0.5` | Shot ngắn hơn bị compact vào shot trước. |
 
 ### `KeyframeConfig`
 
 | Field | Mặc định | Ý nghĩa |
 | --- | --- | --- |
-| `short_side` | `448` | Cạnh ngắn ảnh keyframe (px). |
+| `short_side` | `448` | Cạnh ngắn ảnh keyframe. |
 | `jpeg_quality` | `90` | Quality JPEG. |
-| `long_shot_sec` | `10.0` | Shot dài hơn ngưỡng mới lấy nhiều keyframe. |
-| `every_sec` | `5.0` | Khoảng cách mục tiêu giữa các keyframe. |
-| `max_per_shot` | `5` | Số keyframe tối đa mỗi shot. |
+| `every_sec` | `4.0` | Độ dài mục tiêu mỗi segment. |
+| `candidate_step_sec` | `0.25` | Bước quét ứng viên trong segment. |
+| `min_gap_sec` | `1.0` | Khoảng cách tối thiểu giữa keyframe cùng shot. |
 
-### `KeyframeFilterConfig` (`keyframe.filter`)
+Đã bỏ `long_shot_sec` và `max_per_shot`: số keyframe tính trực tiếp từ độ dài shot.
+
+### `KeyframeFilterConfig`
 
 | Field | Mặc định | Ý nghĩa |
 | --- | --- | --- |
-| `min_sharpness` | `120.0` | Ngưỡng Laplacian variance. |
 | `min_std` | `8.0` | Độ lệch chuẩn tối thiểu. |
 | `min_brightness` | `20.0` | Ngưỡng tối. |
 | `max_brightness` | `235.0` | Ngưỡng sáng. |
-| `duplicate_distance` | `5` | Hamming distance tối thiểu để coi là khác ảnh. |
+| `duplicate_distance` | `5` | Hamming tối thiểu để coi là khác ảnh. |
+| `metric_width` | `320` | Chiều rộng dùng tính junk/sharpness/dHash. |
 
-### `FollowConfig` (`keyframe.follow`)
+Đã bỏ `min_sharpness`.
+
+### `FollowConfig`
 
 | Field | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `step_sec` | `0.5` | Bước giữa các follow frame. |
-| `max_frames` | `8` | Tối đa mỗi keyframe. |
+| `max_frames` | `8` | Tổng tối đa mỗi keyframe. |
 | `window_sec` | `1.0` | Độ dài interval khi search/UI (không dùng khi extract). |
-| `short_side` | `320` | Cạnh ngắn ảnh follow frame. |
+| `short_side` | `320` | Cạnh ngắn ảnh follow. |
 | `quality` | `75` | Quality WebP/JPEG. |
-| `image_format` | `"webp"` | `webp` hoặc `jpeg`. |
+| `image_format` | `webp` | `webp` hoặc `jpeg`. |
+| `bidirectional` | `true` | Lấy cả trước và sau keyframe. |
 
 ---
 
 ## 9. Orchestration trong `index/build.py`
-
-Dù không thuộc package, đây là nơi các hàm ingest được gọi:
 
 ```python
 detect_shots(video.path, video.video_id, video.fps or 25.0, video.duration_ms, cfg.shot)
 
 extract_keyframes(video.path, video.video_id, shots, cfg.keyframe, cfg.artifacts_dir, generation)
 
-extract_follow_frames(video.path, video.video_id, keyframes, shots, cfg.keyframe, cfg.state_root, generation)
+extract_follow_frames(
+    video.path, video.video_id, keyframes, shots, cfg.keyframe,
+    cfg.state_root, generation, keyframe_root=cfg.artifacts_dir,
+)
 ```
 
-- Ba bước độc lập: `shots`, `keyframes`, `follow`.
-- Mỗi bước có trạng thái trong bảng `index_status`
-  (`running` / `done` / `failed`) để resume.
-- Trước khi chạy lại một bước, rows DB và thư mục của generation hiện tại bị xoá.
-- `--reindex` đủ 3 bước → tăng generation, chạy xong dọn generation cũ.
-- `--reindex` kèm `--only` → chạy lại trong generation hiện tại (không tạo mới).
-- Sau khi xong toàn bộ video, `write_keyframe_manifest` ghi
-  `artifacts/manifest.jsonl` cho bundle Kaggle.
+- Ba bước độc lập: `shots`, `keyframes`, `follow`, có trạng thái trong `index_status`
+  để resume.
+- Chạy lại một bước sẽ xoá rows DB và thư mục của generation hiện tại.
+- `--reindex` đủ 3 bước → generation mới và dọn generation cũ.
+- `--reindex` + `--only` → chạy lại trong generation hiện tại.
+- Sau khi xong, `write_keyframe_manifest` ghi `artifacts/manifest.jsonl`.
 
 ### CLI
 
 ```bash
-uv run ir index                       # resume: làm các bước còn thiếu
-uv run ir index --only shots          # chỉ detect shot
-uv run ir index --only keyframes      # chỉ extract keyframe
-uv run ir index --only follow         # chỉ extract follow frames
-uv run ir index --limit 3             # 3 video đầu
-uv run ir index --reindex             # generation mới cho đủ 3 bước
+uv run ir index                       # resume các bước còn thiếu
+uv run ir index --only shots
+uv run ir index --only keyframes
+uv run ir index --only follow
+uv run ir index --limit 3
+uv run ir index --reindex             # áp dụng sampling mới
 uv run ir index --only follow --reindex
 ```
 
@@ -409,18 +359,16 @@ uv run ir index --only follow --reindex
 ## 10. Output trên đĩa
 
 ```text
-artifacts/                                  # bundle upload Kaggle
+artifacts/
   keyframes/<video_id>/g<generation>/<shot:06d>_<kf:03d>.jpg
 
-state/                                      # local-only
+state/
   follow_frames/<video_id>/g<generation>/<shot:06d>_<kf:03d>_<frame:03d>.webp
 ```
 
-- Keyframe luôn `.jpg`.
-- Follow frame `.webp` mặc định, `.jpg` nếu `image_format: jpeg`.
-- Tên file dùng 6 chữ số cho `shot_idx`, 3 chữ số cho `kf_idx`/`frame_idx` để sort ổn định.
-- DB lưu path tương đối (`keyframes/...`, `follow_frames/...`) nên có thể đổi root
-  mà không phải sửa dữ liệu.
+- Keyframe luôn `.jpg`; follow mặc định `.webp`.
+- Tên file 6 chữ số cho `shot_idx`, 3 chữ số cho `kf_idx`/`frame_idx`.
+- DB lưu path tương đối nên có thể đổi root mà không sửa dữ liệu.
 
 ---
 
@@ -428,14 +376,12 @@ state/                                      # local-only
 
 | File | Nội dung |
 | --- | --- |
-| `tests/test_shots.py` | `build_shots`, `merge_short_bursts`, chuẩn hoá biên/gộp shot. |
-| `tests/test_sampling.py` | Timestamp keyframe/follow theo cấu hình. |
-| `tests/test_junk.py` | `to_gray`, Laplacian, `is_junk`, `dhash`/`hamming`. |
-| `tests/test_keyframes.py` | Fallback keyframe, vị trí timestamp, generation, ảnh ghi ra. |
-| `tests/test_follow_frames.py` | `follow_requests` và extract follow frame thực tế từ video tổng hợp. |
+| `tests/test_shots.py` | `build_shots`, `merge_short_bursts`, chuẩn hoá biên. |
+| `tests/test_sampling.py` | `shot_segments`, follow hai chiều, cap theo khoảng cách. |
+| `tests/test_junk.py` | hard-junk, sharpness, dHash/Hamming. |
+| `tests/test_keyframes.py` | Một keyframe mỗi shot, segment scan trên video tổng hợp. |
+| `tests/test_follow_frames.py` | Request hai chiều, extract trước/sau, seed hash. |
 | `tests/test_build.py` | Resume, reindex, partial reindex, lỗi thiếu keyframe. |
-
-Chạy:
 
 ```bash
 uv run pytest
@@ -445,14 +391,16 @@ uv run pytest
 
 ## 12. Ghi chú & giới hạn
 
-- Mỗi video bị **decode hai lần** khi chạy đủ pipeline (một lần keyframe, một lần follow)
-  vì hai bước tách biệt và có thể resume độc lập.
-- Chỉ xử lý stream video đầu tiên; video không có stream video làm `probe_video` raise
-  `ValueError`, nên lỗi này có thể dừng cả lần `scan_corpus`.
-- `frame_time_ms` trả `0` nếu frame không có `time` lẫn `pts`, có thể làm lệch target
-  với container lạ.
-- `dhash` dùng lưới sample cố định (không resize ảnh), nên phụ thuộc kích thước frame gốc.
-- Follow frame không lọc chất lượng ảnh, chỉ chống trùng; UI có thể nhận frame mờ.
-- `merge_short_bursts` bỏ `scene_score` của các shot được tạo lại.
-- `sample_timestamps` với shot dài có thể trả ít hơn `max_per_shot` nếu
-  `length // step` nhỏ hơn `max_per_shot`.
+- **Chưa dedupe xuyên shot**: bỏ burst merge nên logo/card/intro lặp lại có thể
+  chiếm nhiều slot top-k. Đã quyết định defer; nên đo bằng eval rồi làm MMR ở search.
+- **Không fallback**: segment toàn frame hard-junk sẽ không có keyframe. Với corpus
+  hiện tại tỉ lệ này rất thấp, nhưng cảnh tối/phẳng kéo dài có thể thành điểm mù.
+- **Sharpness chỉ xếp hạng**, không loại frame mờ; frame dissolve có thể vẫn được chọn
+  nếu không bị hard-junk.
+- **Decode hai lần** cho keyframe và follow; chưa gộp một pass.
+- **OCR**: ảnh keyframe 448px có thể quá nhỏ cho chữ nhỏ; khi làm OCR nên chạy trên
+  frame gốc lúc extract hoặc lưu bản high-res riêng.
+- **`scene_score`** vẫn là code chết; có thể bỏ field hoặc tính từ stats manager sau.
+- **`window_sec`** nằm trong config ingest nhưng chỉ search/UI dùng.
+- Corpus hiện tại: 53 video, 720p, CFR 25fps, `start_time = 0`; các guard VFR/start_time
+  vẫn được giữ để an toàn với corpus khác.

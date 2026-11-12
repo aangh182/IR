@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import av
 
 from ..types import Video
+
+logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".webm", ".mov", ".m4v"}
 
@@ -42,4 +45,18 @@ def scan_corpus(corpus_dir: str | Path) -> list[Video]:
         for path in root.rglob("*")
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
     )
-    return [probe_video(path) for path in files]
+
+    videos: list[Video] = []
+    seen: dict[str, Path] = {}
+    for path in files:
+        try:
+            video = probe_video(path)
+        except Exception as exc:
+            logger.warning("skip unreadable video %s: %s", path, exc)
+            continue
+        previous = seen.get(video.video_id)
+        if previous is not None:
+            raise ValueError(f"duplicate video_id {video.video_id!r}: {previous} and {path}")
+        seen[video.video_id] = path
+        videos.append(video)
+    return videos

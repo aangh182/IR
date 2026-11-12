@@ -12,14 +12,14 @@ from ir.types import Shot
 
 
 def _make_video(path: Path) -> None:
+    rng = np.random.default_rng(0)
     container = av.open(str(path), mode="w")
     stream = container.add_stream("mpeg4", rate=25)
     stream.width = 64
     stream.height = 64
     stream.pix_fmt = "yuv420p"
-    for index in range(50):
-        color = (200, 30, 30) if index < 25 else (30, 30, 200)
-        array = np.full((64, 64, 3), color, dtype=np.uint8)
+    for _ in range(50):
+        array = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
         frame = av.VideoFrame.from_ndarray(array, format="rgb24")
         for packet in stream.encode(frame):
             container.mux(packet)
@@ -28,18 +28,16 @@ def _make_video(path: Path) -> None:
     container.close()
 
 
-def test_extracts_one_fallback_keyframe_per_shot(tmp_path) -> None:
+def test_extracts_one_keyframe_per_shot(tmp_path) -> None:
     video_path = tmp_path / "sample.mp4"
     _make_video(video_path)
     shots = [
         Shot(video_id="sample", shot_idx=0, start_ms=0, end_ms=1000),
         Shot(video_id="sample", shot_idx=1, start_ms=1000, end_ms=2000),
     ]
-    cfg = KeyframeConfig(short_side=32, long_shot_sec=10.0, max_per_shot=5)
+    cfg = KeyframeConfig(short_side=32)
 
-    keyframes = extract_keyframes(
-        str(video_path), "sample", shots, cfg, tmp_path, generation=1
-    )
+    keyframes = extract_keyframes(str(video_path), "sample", shots, cfg, tmp_path, generation=1)
 
     assert len(keyframes) == 2
     for keyframe in keyframes:

@@ -73,7 +73,10 @@ class SearchService:
         payload = None
         if hits:
             top = hits[0]
-            frame = top.frames[0] if top.frames else None
+            frame = next(
+                (option for option in top.frames if option.is_keyframe),
+                top.frames[0] if top.frames else None,
+            )
             payload = DresPayload(
                 answerSets=[
                     DresAnswerSet(
@@ -104,8 +107,8 @@ class SearchService:
         with closing(connect(self.cfg.db_path)) as conn:
             rows = conn.execute(
                 f"""
-                SELECT k.kf_uid, k.video_id, k.generation, k.shot_idx, k.ts_ms, k.path,
-                       v.duration_ms, s.start_ms, s.end_ms
+                SELECT k.kf_uid, k.video_id, k.generation, k.shot_idx, k.kf_idx,
+                       k.ts_ms, k.path, v.duration_ms, s.start_ms, s.end_ms
                 FROM keyframes k
                 JOIN videos v
                   ON v.video_id = k.video_id AND v.generation = k.generation
@@ -162,10 +165,9 @@ class SearchService:
 
     def _frame_options(self, conn, rows) -> dict[tuple[str, int], list[FrameOption]]:
         keys = [
-            (int(row["generation"]), str(row["video_id"]), int(row["shot_idx"]))
-            for row in rows
+            (int(row["generation"]), str(row["video_id"]), int(row["shot_idx"])) for row in rows
         ]
-        frames_by_shot: dict[tuple[str, int], list] = {}
+        frames_by_key: dict[tuple[str, int, int], list] = {}
         if keys:
             clauses = " OR ".join(
                 "(generation = ? AND video_id = ? AND shot_idx = ?)" for _ in keys
@@ -181,8 +183,12 @@ class SearchService:
                 params,
             ).fetchall()
             for follow_row in follow_rows:
-                pair = (str(follow_row["video_id"]), int(follow_row["shot_idx"]))
-                frames_by_shot.setdefault(pair, []).append(follow_row)
+                key = (
+                    str(follow_row["video_id"]),
+                    int(follow_row["shot_idx"]),
+                    int(follow_row["kf_idx"]),
+                )
+                frames_by_key.setdefault(key, []).append(follow_row)
 
         window_ms = int(self.cfg.keyframe.follow.window_sec * 1000)
         max_frames = self.cfg.keyframe.follow.max_frames
@@ -191,6 +197,7 @@ class SearchService:
         for row in rows:
             video_id = str(row["video_id"])
             shot_idx = int(row["shot_idx"])
+            kf_idx = int(row["kf_idx"])
             ts_ms = int(row["ts_ms"])
             duration_ms = int(row["duration_ms"] or 0)
             shot_start = row["start_ms"]
@@ -203,7 +210,7 @@ class SearchService:
             keyframe_start, keyframe_end = self._frame_interval(
                 ts_ms, shot_start, shot_end, duration_ms, window_ms
             )
-            options[(video_id, shot_idx)] = [
+            frames = [
                 FrameOption(
                     ts_ms=ts_ms,
                     start_ms=keyframe_start,
@@ -213,21 +220,17 @@ class SearchService:
                 )
             ]
 
-            follows = [
-                follow_row
-                for follow_row in frames_by_shot.get((video_id, shot_idx), [])
-                if int(follow_row["ts_ms"]) > ts_ms
-            ][:max_frames]
-
-            for follow_row in follows:
+            for follow_row in frames_by_key.get((video_id, shot_idx, kf_idx), [])[:max_frames]:
                 follow_ts = int(follow_row["ts_ms"])
+                if follow_ts == ts_ms:
+                    continue
                 start, end = self._frame_interval(
                     follow_ts, shot_start, shot_end, duration_ms, window_ms
                 )
                 follow_relative = str(follow_row["path"])
                 if follow_relative.startswith("follow_frames/"):
                     follow_relative = follow_relative[len("follow_frames/") :]
-                options[(video_id, shot_idx)].append(
+                frames.append(
                     FrameOption(
                         ts_ms=follow_ts,
                         start_ms=start,
@@ -235,6 +238,8 @@ class SearchService:
                         url=f"/api/frames/{quote(follow_relative)}",
                     )
                 )
+
+            options[(video_id, shot_idx)] = sorted(frames, key=lambda item: item.ts_ms)
 
         return options
 

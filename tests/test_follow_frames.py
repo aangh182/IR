@@ -39,17 +39,24 @@ def _keyframe(ts_ms: int) -> Keyframe:
     )
 
 
-def test_follow_requests_skip_short_tail() -> None:
+def test_follow_requests_are_bidirectional() -> None:
     shot = Shot(video_id="sample", shot_idx=0, start_ms=0, end_ms=2000)
     cfg = FollowConfig(step_sec=0.5, max_frames=8)
 
     assert follow_requests([_keyframe(1000)], [shot], cfg) == [
+        (500, 0, 0),
         (1500, 0, 0),
     ]
-    assert follow_requests([_keyframe(1900)], [shot], cfg) == []
 
 
-def test_extracts_follow_frames_after_keyframe(tmp_path) -> None:
+def test_follow_requests_stop_at_shot_bounds() -> None:
+    shot = Shot(video_id="sample", shot_idx=0, start_ms=0, end_ms=1200)
+    cfg = FollowConfig(step_sec=0.5, max_frames=8)
+
+    assert follow_requests([_keyframe(1000)], [shot], cfg) == [(500, 0, 0)]
+
+
+def test_extracts_follow_frames_both_directions(tmp_path) -> None:
     video_path = tmp_path / "sample.mp4"
     _make_video(video_path)
     shots = [Shot(video_id="sample", shot_idx=0, start_ms=0, end_ms=2000)]
@@ -62,17 +69,17 @@ def test_extracts_follow_frames_after_keyframe(tmp_path) -> None:
         str(video_path), "sample", [_keyframe(1000)], shots, cfg, tmp_path, generation=1
     )
 
-    assert len(frames) == 3
+    assert len(frames) == 6
     timestamps = [frame.ts_ms for frame in frames]
     assert timestamps == sorted(timestamps)
+    assert 1000 not in timestamps
     for frame in frames:
-        assert 1000 < frame.ts_ms < 2000
+        assert 0 < frame.ts_ms < 2000
         assert frame.generation == 1
-        assert frame.frame_idx < 3
         assert frame.path.startswith("follow_frames/sample/g1/")
         assert frame.path.endswith(".webp")
         assert (tmp_path / frame.path).exists()
-    assert [frame.frame_idx for frame in frames] == [0, 1, 2]
+    assert [frame.frame_idx for frame in frames] == [0, 1, 2, 3, 4, 5]
 
     with Image.open(tmp_path / frames[0].path) as image:
         assert image.format == "WEBP"

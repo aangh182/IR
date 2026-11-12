@@ -55,8 +55,24 @@ Shot detection dùng PySceneDetect `ContentDetector`. Trong `config.yaml`:
 - `shot.pyscenedetect_threshold`: ngưỡng cắt cảnh (mặc định 27.0).
 - `shot.pyscenedetect_burst_merge_sec`: gộp các cụm ≥2 shot ngắn liên tiếp (card
   chuyển cảnh, transition, cảnh rung) thành một shot, giữ nguyên shot ngắn đơn lẻ.
-  Đặt `0` để tắt.
-- `shot.min_shot_sec`: thời lượng shot tối thiểu.
+  Mặc định `0` (tắt) để mỗi cảnh ngắn vẫn có keyframe riêng; bật lại bằng
+  `1.5` nếu muốn giảm shot vụn.
+- `shot.min_shot_sec`: thời lượng shot tối thiểu (shot ngắn hơn bị gộp vào shot trước).
+
+### Keyframe sampling
+
+Mỗi shot được chia thành các segment đều nhau, mỗi segment lấy một keyframe:
+
+- `keyframe.every_sec`: độ dài mục tiêu mỗi segment (mặc định 4.0).
+  `count = ceil(shot_length / every_sec)`, không cap.
+- `keyframe.candidate_step_sec`: bước quét ứng viên trong segment (mặc định 0.25).
+  Mỗi segment chọn frame non-junk có sharpness cao nhất.
+- `keyframe.min_gap_sec`: khoảng cách tối thiểu giữa hai keyframe trong cùng shot
+  (mặc định 1.0), tránh chụm cụm.
+- `keyframe.filter`: hard-junk chỉ theo `std`/brightness (`min_std`, `min_brightness`,
+  `max_brightness`); `duplicate_distance` dùng dHash 9×8 `INTER_AREA`.
+  `metric_width` (mặc định 320) là chiều rộng dùng để tính junk/sharpness.
+- Segment không có frame non-junk sẽ **không tạo keyframe** (không còn fallback ảnh rác).
 
 ## Layout artifacts
 
@@ -135,17 +151,18 @@ uv run ir index --only follow      # chỉ extract follow frames (backfill, gi�
 uv run ir stats
 ```
 
-Follow frames: sau mỗi keyframe, extract thêm các frame kế tiếp **trong cùng shot** để chọn ra frame đúng nhất. Cấu hình trong `config.yaml`:
+Follow frames: quanh mỗi keyframe, extract thêm các frame **cả trước lẫn sau trong cùng shot** để chọn ra frame đúng nhất. dHash của keyframe được seed vào nhóm để frame follow đầu tiên không trùng ảnh chính. Cấu hình trong `config.yaml`:
 
 ```yaml
 keyframe:
   follow:
     step_sec: 0.5       # khoảng cách giữa các frame
-    max_frames: 8       # tối đa mỗi keyframe
+    max_frames: 8       # tối đa mỗi keyframe (chia đều hai phía)
     window_sec: 1.0     # độ dài interval quanh frame khi chọn
     short_side: 320     # cạnh ngắn của ảnh (keyframe chính vẫn 448)
     quality: 75         # quality của WebP/JPEG
     image_format: webp  # webp | jpeg
+    bidirectional: true # lấy cả trước và sau keyframe
 ```
 
 Ảnh lưu ở `state/follow_frames/<video_id>/g<generation>/<shot>_<kf>_<frame>.webp` (hoặc `.jpg` nếu `image_format: jpeg`), metadata ở bảng `follow_frames`. Follow frames **không** được embed — FAISS/index giữ nguyên keyframe, nên không cần chạy lại Kaggle.
@@ -154,6 +171,8 @@ Follow frames chỉ dùng để hiển thị/chọn frame trên UI nên được
 
 Lưu ý:
 
+- Sampling mới (4s/segment, bỏ burst merge, follow hai chiều) cần chạy lại `uv run ir index --reindex` để áp dụng.
+- Số keyframe tăng khoảng 40-50% so với cấu hình cũ; thời gian embed Kaggle tăng tương ứng.
 - Artifacts hiện tại đã sinh bằng PySceneDetect; dùng `uv run ir index --reindex` nếu muốn tạo generation mới.
 - Embedding lấy từ notebook Kaggle, import bằng `uv run ir import-shards <zip>`.
 - `uv run ir export-keyframes` luôn ghi lại `artifacts/manifest.jsonl` từ DB trước khi zip.

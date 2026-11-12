@@ -77,7 +77,7 @@ def test_search_dedups_by_shot_and_builds_payload(tmp_path, monkeypatch) -> None
             for shot_idx, kf_idx, ts_ms in ((0, 0, 5000), (0, 1, 8000), (1, 0, 40000))
         ]
 
-        for frame_idx, ts_ms in enumerate((5500, 6000)):
+        for frame_idx, ts_ms in enumerate((4500, 5500)):
             insert_follow_frame(
                 conn,
                 FollowFrame(
@@ -99,9 +99,7 @@ def test_search_dedups_by_shot_and_builds_payload(tmp_path, monkeypatch) -> None
 
     query = vectors[0].copy()
     faiss.normalize_L2(query.reshape(1, -1))
-    monkeypatch.setattr(
-        service_module, "TextEncoder", lambda *args, **kwargs: _FakeEncoder(query)
-    )
+    monkeypatch.setattr(service_module, "TextEncoder", lambda *args, **kwargs: _FakeEncoder(query))
 
     response = SearchService(cfg).search("a query", top_k=2)
 
@@ -115,20 +113,21 @@ def test_search_dedups_by_shot_and_builds_payload(tmp_path, monkeypatch) -> None
     assert (by_shot[1].start_ms, by_shot[1].end_ms) == (30_000, 60_000)
 
     frames = by_shot[0].frames
-    assert len(frames) == 3
-    assert frames[0].is_keyframe is True
-    assert frames[0].ts_ms == 5000
-    assert frames[0].url.startswith("/api/keyframes/V1/g0/")
-    assert (frames[0].start_ms, frames[0].end_ms) == (4500, 5500)
-    assert [frame.ts_ms for frame in frames[1:]] == [5500, 6000]
-    assert frames[1].url.startswith("/api/frames/V1/g0/")
+    assert [frame.ts_ms for frame in frames] == [4500, 5000, 5500]
+    keyframe = next(frame for frame in frames if frame.is_keyframe)
+    assert keyframe.ts_ms == 5000
+    assert keyframe.url.startswith("/api/keyframes/V1/g0/")
+    assert (keyframe.start_ms, keyframe.end_ms) == (4500, 5500)
+    follows = [frame for frame in frames if not frame.is_keyframe]
+    assert [frame.ts_ms for frame in follows] == [4500, 5500]
+    assert all(frame.url.startswith("/api/frames/V1/g0/") for frame in follows)
     assert len(by_shot[1].frames) == 1
 
     assert response.dres_payload is not None
     answer = response.dres_payload.answerSets[0].answers[0]
     assert answer.media_item_name == "V1"
-    assert answer.start == frames[0].start_ms
-    assert answer.end == frames[0].end_ms
+    assert answer.start == keyframe.start_ms
+    assert answer.end == keyframe.end_ms
 
 
 def test_search_rejects_empty_query(tmp_path, monkeypatch) -> None:
