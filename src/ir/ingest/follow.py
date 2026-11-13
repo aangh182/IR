@@ -55,6 +55,7 @@ def extract_follow_frames(
     artifacts_dir: Path,
     generation: int = 0,
     keyframe_root: Path | None = None,
+    decode_threads: int = 0,
 ) -> list[FollowFrame]:
     pending = deque(follow_requests(keyframes, shots, cfg.follow))
     if not pending:
@@ -70,6 +71,8 @@ def extract_follow_frames(
     with av.open(video_path) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
+        if decode_threads > 0:
+            stream.thread_count = decode_threads
         for frame in container.decode(stream):
             timestamp = frame_time_ms(frame, stream)
             while pending and pending[0][0] <= timestamp:

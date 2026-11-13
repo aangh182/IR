@@ -140,6 +140,7 @@ def extract_keyframes(
     cfg: KeyframeConfig,
     artifacts_dir: Path,
     generation: int = 0,
+    decode_threads: int = 0,
 ) -> list[Keyframe]:
     segments: list[Segment] = []
     for shot in shots:
@@ -184,6 +185,8 @@ def extract_keyframes(
     with av.open(video_path) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
+        if decode_threads > 0:
+            stream.thread_count = decode_threads
         for frame in container.decode(stream):
             timestamp = frame_time_ms(frame, stream)
             while current is not None and timestamp >= current[1]:

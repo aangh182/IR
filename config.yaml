@@ -1,4 +1,4 @@
-corpus_dir: minibatch
+corpus_dir: Dataset
 artifacts_dir: artifacts
 state_dir: state
 
@@ -6,6 +6,10 @@ shot:
   pyscenedetect_threshold: 27.0
   pyscenedetect_burst_merge_sec: 0.0
   min_shot_sec: 0.5
+
+ingest:
+  workers: 6
+  decode_threads: 2
 
 keyframe:
   short_side: 448

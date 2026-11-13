@@ -44,6 +44,11 @@ class KeyframeConfig(BaseModel):
     follow: FollowConfig = Field(default_factory=FollowConfig)
 
 
+class IngestConfig(BaseModel):
+    workers: int = 1
+    decode_threads: int = 2
+
+
 class EmbedConfig(BaseModel):
     model: str = "sentence-transformers/clip-ViT-B-16"
     dim: int = 512
@@ -114,6 +119,7 @@ class AppConfig(BaseModel):
     state_dir: Path | None = None
     shot: ShotConfig = Field(default_factory=ShotConfig)
     keyframe: KeyframeConfig = Field(default_factory=KeyframeConfig)
+    ingest: IngestConfig = Field(default_factory=IngestConfig)
     embed: EmbedConfig = Field(default_factory=EmbedConfig)
     ocr: OcrConfig = Field(default_factory=OcrConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
