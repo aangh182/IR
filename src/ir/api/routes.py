@@ -4,6 +4,7 @@ import json
 import mimetypes
 from contextlib import closing
 from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -11,7 +12,15 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..config import AppConfig
-from ..dres import DresClient, DresError, dres_session
+from ..dres import (
+    DresClient,
+    DresError,
+    dres_session,
+    kis_answer,
+    qa_answer,
+    raw_submission,
+    trake_answer,
+)
 from ..search.service import IndexUnavailableError, SearchService
 from ..store.db import connect, get_stats
 from ..types import SearchResponse
@@ -26,10 +35,14 @@ class SearchRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
 
 
-class SubmitRequest(BaseModel):
-    video_id: str = Field(min_length=1)
-    start_ms: int = Field(ge=0)
-    end_ms: int = Field(ge=0)
+class DresSubmitRequest(BaseModel):
+    kind: Literal["kis", "vkis", "qa", "trake", "raw"] = "kis"
+    video_id: str | None = None
+    ts_ms: int | None = Field(default=None, ge=0)
+    answer: str | None = None
+    frame_ids: list[int] | None = None
+    payload: dict[str, Any] | None = None
+    task_id: str | None = None
 
 
 def _config(request: Request) -> AppConfig:
@@ -126,19 +139,67 @@ def dres_status(request: Request) -> dict[str, object]:
 
 
 @router.post("/dres/submit")
-def dres_submit(payload: SubmitRequest, request: Request) -> dict[str, object]:
+def dres_submit(payload: DresSubmitRequest, request: Request) -> dict[str, object]:
     cfg = _config(request)
     if not dres_session(cfg):
         raise HTTPException(status_code=400, detail="Chưa cấu hình DRES session id")
-    if payload.end_ms <= payload.start_ms:
-        raise HTTPException(status_code=400, detail="end_ms phải lớn hơn start_ms")
+
+    try:
+        answers = _dres_answers(payload)
+    except DresError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     client = DresClient.from_config(cfg)
     try:
-        result = client.submit(payload.video_id, payload.start_ms, payload.end_ms)
+        outcome = client.submit(answers, task_id=payload.task_id)
     except DresError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return result
+        status = 401 if exc.status == 401 else 502
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    return {
+        "status": outcome.status,
+        "submission": outcome.verdict,
+        "description": outcome.description,
+        "http_status": outcome.http_status,
+        "category": _verdict_category(outcome.verdict),
+        "answers": answers,
+    }
+
+
+def _dres_answers(payload: DresSubmitRequest) -> list[dict[str, Any]]:
+    if payload.kind == "raw":
+        if payload.payload is None:
+            raise DresError("Kind raw cần payload ApiClientSubmission")
+        return raw_submission(payload.payload)
+
+    if payload.kind == "trake":
+        if not payload.video_id:
+            raise DresError("Thiếu video_id")
+        if not payload.frame_ids:
+            raise DresError("TRAKE cần danh sách frame ids")
+        return [trake_answer(payload.video_id, payload.frame_ids)]
+
+    if not payload.video_id:
+        raise DresError("Thiếu video_id")
+    if payload.ts_ms is None:
+        raise DresError("Thiếu ts_ms")
+
+    if payload.kind == "qa":
+        if not payload.answer:
+            raise DresError("QA cần answer")
+        return [qa_answer(payload.answer, payload.video_id, payload.ts_ms)]
+
+    return [kis_answer(payload.video_id, payload.ts_ms)]
+
+
+def _verdict_category(verdict: str) -> str:
+    if verdict == "CORRECT":
+        return "correct"
+    if verdict == "WRONG":
+        return "wrong"
+    if verdict in {"INDETERMINATE", "UNDECIDABLE"}:
+        return "review"
+    return "unknown"
 
 
 @router.get("/keyframes/{path:path}")

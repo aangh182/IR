@@ -28,8 +28,8 @@ function dresPayload(hit: Hit, frame: FrameOption) {
         answers: [
           {
             mediaItemName: hit.video_id,
-            start: frame.start_ms,
-            end: frame.end_ms,
+            start: frame.ts_ms,
+            end: frame.ts_ms,
           },
         ],
       },

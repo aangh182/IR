@@ -64,8 +64,24 @@ export type DresStatus = {
   error?: string
 }
 
+export type DresSubmitKind = 'kis' | 'vkis' | 'qa' | 'trake' | 'raw'
+
+export type DresSubmitRequest = {
+  kind: DresSubmitKind
+  video_id?: string | null
+  ts_ms?: number | null
+  answer?: string | null
+  frame_ids?: number[] | null
+  payload?: unknown
+  task_id?: string | null
+}
+
 export type DresSubmitResult = {
   status?: boolean
-  description?: string
   submission?: string
+  description?: string
+  http_status?: number
+  category?: 'correct' | 'wrong' | 'review' | 'unknown'
+  answers?: unknown[]
+  detail?: string
 }

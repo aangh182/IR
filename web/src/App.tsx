@@ -28,6 +28,7 @@ function App() {
   const [statusError, setStatusError] = useState<string | null>(null)
 
   const [query, setQuery] = useState('')
+  const [topK, setTopK] = useState(20)
   const [results, setResults] = useState<Hit[]>([])
   const [selected, setSelected] = useState<Hit | null>(null)
   const [elapsed, setElapsed] = useState<number | null>(null)
@@ -76,7 +77,7 @@ function App() {
       const response = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: trimmed, top_k: 20 }),
+        body: JSON.stringify({ text: trimmed, top_k: topK }),
       })
       if (!response.ok) throw new Error(await responseError(response))
 
@@ -142,6 +143,20 @@ function App() {
               spellCheck={false}
               className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-indigo-400"
             />
+            <label className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs text-slate-400">
+              <span className="whitespace-nowrap">Top K</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={topK}
+                onChange={(event) => {
+                  const next = Number(event.target.value)
+                  setTopK(Number.isNaN(next) ? 1 : Math.min(50, Math.max(1, next)))
+                }}
+                className="w-14 bg-transparent py-3 text-center font-mono text-sm text-slate-100 outline-none"
+              />
+            </label>
             <button
               type="submit"
               disabled={loading || !query.trim()}
@@ -224,15 +239,15 @@ function App() {
             )}
           </section>
 
-          <aside className="lg:sticky lg:top-6 lg:self-start">
+          <aside className="lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
             {selected ? (
               <div className="space-y-4">
+                <DresPanel hit={selected} frame={activeFrame} />
                 <VideoPanel
                   key={`${selected.video_id}-${selected.shot_idx}-${selected.start_ms}`}
                   hit={selected}
                   onActiveFrameChange={handleActiveFrame}
                 />
-                <DresPanel hit={selected} frame={activeFrame} />
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">

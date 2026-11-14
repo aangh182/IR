@@ -175,13 +175,50 @@ cổng `5173` và `8000` ở tab **PORTS**.
 2. Grid kết quả hiện keyframe kèm score; bấm một card để chọn.
 3. Panel phải: player tự seek tới frame, dải thumbnail bên dưới cho chọn keyframe
    hoặc follow frame đúng nhất.
-4. Nút `Copy DRES payload` copy JSON `answerSets` của frame đang chọn.
-5. Panel `DRES` hiển thị user, evaluation và task đang chạy, tự làm mới mỗi 15 giây.
+4. Nút `Copy DRES payload` copy JSON `answerSets` của frame đang chọn (KIS, `start = end`).
+5. Panel `DRES` hiển thị user, evaluation, task đang chạy và form nộp bài (xem bước 5).
 
 ### 5. Nộp bài lên DRES
 
-Chọn kết quả + frame rồi bấm `Nộp lên DRES`. Panel hiện kết quả trả về
-(`description`, `submission`). Mỗi truy vấn **không được nộp trùng**.
+Panel DRES có 4 tab theo đúng quy định của BTC:
+
+| Tab | Trường nhập | Payload gửi đi |
+| --- | --- | --- |
+| KIS / VKIS | Video ID, thời gian frame | `mediaItemName` + `start = end = ts_ms` |
+| Q&A | Video ID, câu trả lời, thời gian frame | `text: QA-<ANSWER>-<VIDEO_ID>-<TS>` |
+| TRAKE | Video ID, danh sách frame ids | `text: TR-<VIDEO_ID>-<ID1>,<ID2>,...` |
+| Raw JSON | payload `ApiClientSubmission` | gửi nguyên văn |
+
+- Tab tự chọn theo task đang chạy (`tkis`/`vkis` → KIS, `qa` → Q&A, `trake` → TRAKE).
+- Video ID tự điền từ kết quả đang chọn, thời gian tự điền theo frame đang chọn;
+  nhập được cả `MM:SS.mmm` lẫn số ms. Phần mở rộng `.mp4`, `.mkv`… được tự cắt bỏ.
+- Khung "Payload gửi lên DRES" hiển thị đúng JSON trước khi bấm `Nộp bài (Submit)`.
+- Mỗi truy vấn **không được nộp trùng**.
+
+Kết quả chấm hiện ngay bằng banner theo 4 trường hợp:
+
+| Banner | Ý nghĩa |
+| --- | --- |
+| `CHÍNH XÁC` (CORRECT) | đúng, được tính điểm |
+| `SAI` (WRONG) | sai, bị trừ điểm |
+| `ĐANG THẨM ĐỊNH` (INDETERMINATE / UNDECIDABLE) | BGK kiểm tra thủ công |
+| lỗi HTTP | 401 session hết hạn, 404 sai evaluation, 412 nộp trùng/hết giờ |
+
+CLI:
+
+```bash
+uv run ir dres-status                        # user, evaluation, task đang chạy
+uv run ir dres-submit video_0108 18500              # KIS
+uv run ir dres-submit video_0108 24300 --kind qa --answer 42
+uv run ir dres-submit video_0055 --kind trake --frames 140,395,820,1450
+uv run ir dres-submit --kind raw --payload payload.json
+uv run ir dres-submit video_0108 18500 --dry-run    # chỉ in payload, không nộp
+```
+
+API tương ứng:
+
+- `GET /api/dres/status` — user + evaluation + task hiện tại.
+- `POST /api/dres/submit` — body `{kind, video_id, ts_ms, answer, frame_ids, payload}`.
 
 Cấu hình trong `config.yaml`:
 

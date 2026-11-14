@@ -197,25 +197,72 @@ def dres_status() -> None:
 
 @app.command("dres-submit")
 def dres_submit(
-    video_id: Annotated[str, typer.Argument(help="Video id, không kèm phần mở rộng.")],
-    start_ms: Annotated[int, typer.Argument(help="Thời điểm bắt đầu (ms).")],
-    end_ms: Annotated[int, typer.Argument(help="Thời điểm kết thúc (ms).")],
+    video_id: Annotated[
+        str | None, typer.Argument(help="Video id, không cần phần mở rộng.")
+    ] = None,
+    ts_ms: Annotated[
+        int | None, typer.Argument(help="Mốc thời gian frame (ms) cho KIS/VKIS/QA.")
+    ] = None,
+    kind: Annotated[
+        str, typer.Option("--kind", help="kis | vkis | qa | trake | raw")
+    ] = "kis",
+    answer: Annotated[str | None, typer.Option("--answer", help="Câu trả lời cho QA.")] = None,
+    frames: Annotated[
+        str | None, typer.Option("--frames", help="Frame ids cho TRAKE, cách nhau bởi dấu phẩy.")
+    ] = None,
+    payload_file: Annotated[
+        Path | None, typer.Option("--payload", help="File JSON ApiClientSubmission cho raw.")
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Chỉ in payload, không nộp.")] = False,
 ) -> None:
-    from .dres import DresClient, DresError
+    from .dres import (
+        DresClient,
+        DresError,
+        kis_answer,
+        qa_answer,
+        raw_submission,
+        trake_answer,
+    )
 
-    if end_ms <= start_ms:
-        typer.echo("end_ms phải lớn hơn start_ms", err=True)
-        raise typer.Exit(code=1)
+    kind = kind.lower()
+    try:
+        if kind == "raw":
+            if payload_file is None:
+                raise DresError("--kind raw cần --payload <file.json>")
+            answers = raw_submission(json.loads(payload_file.read_text(encoding="utf-8")))
+        elif kind == "trake":
+            if not video_id or not frames:
+                raise DresError("--kind trake cần VIDEO_ID và --frames")
+            frame_ids = [int(part) for part in frames.split(",") if part.strip()]
+            answers = [trake_answer(video_id, frame_ids)]
+        elif kind == "qa":
+            if not video_id or ts_ms is None or not answer:
+                raise DresError("--kind qa cần VIDEO_ID, TS_MS và --answer")
+            answers = [qa_answer(answer, video_id, ts_ms)]
+        else:
+            if not video_id or ts_ms is None:
+                raise DresError("KIS/VKIS cần VIDEO_ID và TS_MS")
+            answers = [kis_answer(video_id, ts_ms)]
+    except (DresError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    body = {"answerSets": [{"answers": answers}]}
+    if dry_run:
+        typer.echo(json.dumps(body, ensure_ascii=False, indent=2))
+        return
 
     cfg = load_config()
     client = DresClient.from_config(cfg)
     try:
-        result = client.submit(video_id, start_ms, end_ms)
+        outcome = client.submit(answers)
     except DresError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    typer.echo(f"submission: {outcome.verdict} (HTTP {outcome.http_status})")
+    if outcome.description:
+        typer.echo(f"description: {outcome.description}")
 
 
 @app.command()

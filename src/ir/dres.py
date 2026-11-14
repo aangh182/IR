@@ -5,12 +5,26 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
 
-__all__ = ["DresClient", "DresError", "EvaluationInfo", "TaskInfo", "dres_session"]
+__all__ = [
+    "DresClient",
+    "DresError",
+    "EvaluationInfo",
+    "SubmitOutcome",
+    "TaskInfo",
+    "answer_kind_for_group",
+    "dres_session",
+    "kis_answer",
+    "qa_answer",
+    "raw_submission",
+    "trake_answer",
+]
 
 
 def dres_session(cfg: AppConfig) -> str | None:
@@ -48,6 +62,84 @@ class EvaluationInfo:
     task_templates: list[TaskInfo]
 
 
+@dataclass(frozen=True)
+class SubmitOutcome:
+    status: bool
+    verdict: str
+    description: str
+    http_status: int
+
+    @property
+    def is_correct(self) -> bool:
+        return self.verdict == "CORRECT"
+
+    @property
+    def is_wrong(self) -> bool:
+        return self.verdict == "WRONG"
+
+    @property
+    def is_review(self) -> bool:
+        return self.verdict in {"INDETERMINATE", "UNDECIDABLE"}
+
+
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts"}
+
+
+def normalize_video_id(video_id: str) -> str:
+    value = video_id.strip()
+    suffix = Path(value).suffix.lower()
+    if suffix in VIDEO_EXTENSIONS:
+        return value[: -len(suffix)]
+    return value
+
+
+def kis_answer(video_id: str, ts_ms: int) -> dict[str, Any]:
+    frame_ms = max(0, int(ts_ms))
+    return {
+        "mediaItemName": normalize_video_id(video_id),
+        "start": frame_ms,
+        "end": frame_ms,
+    }
+
+
+def qa_answer(answer: str, video_id: str, ts_ms: int) -> dict[str, Any]:
+    text = f"QA-{answer.strip()}-{normalize_video_id(video_id)}-{max(0, int(ts_ms))}"
+    return {"text": text}
+
+
+def trake_answer(video_id: str, frame_ids: Sequence[int]) -> dict[str, Any]:
+    if not frame_ids:
+        raise DresError("TRAKE cần ít nhất một frame id")
+    joined = ",".join(str(int(frame)) for frame in frame_ids)
+    return {"text": f"TR-{normalize_video_id(video_id)}-{joined}"}
+
+
+def raw_submission(body: dict[str, Any]) -> list[dict[str, Any]]:
+    answer_sets = body.get("answerSets")
+    if not isinstance(answer_sets, list) or not answer_sets:
+        raise DresError("Payload phải có answerSets không rỗng")
+    answers: list[dict[str, Any]] = []
+    for answer_set in answer_sets:
+        if not isinstance(answer_set, dict):
+            raise DresError("Mỗi answerSet phải là object")
+        items = answer_set.get("answers")
+        if not isinstance(items, list):
+            raise DresError("Mỗi answerSet phải có answers")
+        answers.extend(item for item in items if isinstance(item, dict))
+    if not answers:
+        raise DresError("Payload không có answer nào")
+    return answers
+
+
+def answer_kind_for_group(task_group: str) -> str:
+    group = task_group.strip().lower()
+    if group == "qa":
+        return "qa"
+    if group == "trake":
+        return "trake"
+    return "kis"
+
+
 class DresClient:
     def __init__(
         self,
@@ -76,7 +168,12 @@ class DresClient:
         )
 
     def _request(
-        self, method: str, path: str, *, body: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        with_status: bool = False,
     ) -> Any:
         query = urllib.parse.urlencode({"session": self.session_id})
         url = f"{self.base_url}{path}?{query}"
@@ -89,20 +186,25 @@ class DresClient:
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                status_code = response.status
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             detail = _error_detail(raw) or exc.reason
-            raise DresError(f"DRES {exc.code}: {detail}", status=exc.code) from exc
+            raise DresError(_describe_http_error(exc.code, detail), status=exc.code) from exc
         except urllib.error.URLError as exc:
             raise DresError(f"Không kết nối được DRES: {exc.reason}") from exc
 
-        if not raw:
-            return None
-        try:
-            return json.loads(raw.decode("utf-8"))
-        except ValueError as exc:
-            raise DresError("DRES trả về dữ liệu không phải JSON") from exc
+        payload: Any = None
+        if raw:
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except ValueError as exc:
+                raise DresError("DRES trả về dữ liệu không phải JSON") from exc
+
+        if with_status:
+            return status_code, payload
+        return payload
 
     def list_evaluations(self) -> list[EvaluationInfo]:
         payload = self._request("GET", "/api/v2/client/evaluation/list") or []
@@ -154,40 +256,57 @@ class DresClient:
 
     def submit(
         self,
-        video_id: str,
-        start_ms: int,
-        end_ms: int,
+        answers: Sequence[dict[str, Any]],
         *,
         evaluation_id: str | None = None,
-        collection: str | None = None,
-    ) -> dict[str, Any]:
+        task_id: str | None = None,
+    ) -> SubmitOutcome:
+        if not answers:
+            raise DresError("Không có đáp án nào để nộp")
         target = evaluation_id or self.evaluation_id or self.active_evaluation().id
-        answer: dict[str, Any] = {
-            "mediaItemName": video_id,
-            "start": int(start_ms),
-            "end": int(end_ms),
-        }
-        if collection:
-            answer["mediaItemCollectionName"] = collection
+        answer_set: dict[str, Any] = {"answers": list(answers)}
+        if task_id:
+            answer_set["taskId"] = task_id
 
-        payload = self._request(
+        status_code, payload = self._request(
             "POST",
             f"/api/v2/submit/{target}",
-            body={"answerSets": [{"answers": [answer]}]},
+            body={"answerSets": [answer_set]},
+            with_status=True,
         )
-        return payload or {}
+        body = payload if isinstance(payload, dict) else {}
+        verdict = str(body.get("submission") or "")
+        if status_code not in (200, 202) or not body.get("status", False):
+            raise DresError(
+                _describe_submit_failure(status_code, body, verdict),
+                status=status_code,
+            )
+        return SubmitOutcome(
+            status=True,
+            verdict=verdict or "INDETERMINATE",
+            description=str(body.get("description") or ""),
+            http_status=status_code,
+        )
 
-    def describe_submission(
-        self, video_id: str, start_ms: int, end_ms: int, *, collection: str | None = None
-    ) -> dict[str, Any]:
-        answer: dict[str, Any] = {
-            "mediaItemName": video_id,
-            "start": int(start_ms),
-            "end": int(end_ms),
-        }
-        if collection:
-            answer["mediaItemCollectionName"] = collection
-        return {"answerSets": [{"answers": [answer]}]}
+
+_HTTP_HINTS = {
+    401: "Session ID đã hết hạn — đăng nhập lại DRES và cập nhật session.",
+    404: "Sai Evaluation ID hoặc task không tồn tại.",
+    412: "Bài nộp bị từ chối: nộp trùng kết quả, hoặc thời gian làm bài đã hết.",
+}
+
+
+def _describe_http_error(status: int, detail: object) -> str:
+    hint = _HTTP_HINTS.get(status)
+    base = f"HTTP {status}: {detail}"
+    return f"{base} — {hint}" if hint else base
+
+
+def _describe_submit_failure(
+    status: int, body: dict[str, Any], verdict: str
+) -> str:
+    detail = body.get("description") or verdict or "không rõ lý do"
+    return _describe_http_error(status, detail)
 
 
 def _session_from_file(cfg: AppConfig) -> str | None:
