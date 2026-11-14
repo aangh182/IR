@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import mimetypes
 from contextlib import closing
 from pathlib import Path
@@ -22,7 +21,7 @@ from ..dres import (
     trake_answer,
 )
 from ..search.service import IndexUnavailableError, SearchService
-from ..store.db import connect, get_stats
+from ..store.db import connect, get_stats, object_facets
 from ..types import SearchResponse
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -33,6 +32,8 @@ mimetypes.add_type("image/webp", ".webp")
 class SearchRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     top_k: int | None = Field(default=None, ge=1, le=50)
+    objects: list[str] = Field(default_factory=list, max_length=20)
+    model: str | None = None
 
 
 class DresSubmitRequest(BaseModel):
@@ -56,26 +57,17 @@ def _service(request: Request) -> SearchService:
 @router.get("/health")
 def health(request: Request) -> dict[str, object]:
     cfg = _config(request)
-    index_ready = cfg.faiss_path.is_file() and cfg.id_map_path.is_file()
-
-    index_model = None
-    index_count = None
-    if cfg.manifest_path.is_file():
-        try:
-            manifest = json.loads(cfg.manifest_path.read_text(encoding="utf-8"))
-            index_model = manifest.get("model")
-            index_count = manifest.get("count")
-        except (OSError, ValueError):
-            pass
+    models = _service(request).models()
+    default = next((item for item in models if item["default"]), None)
 
     return {
         "status": "ok",
         "version": __version__,
         "db": str(cfg.db_path),
         "db_ready": cfg.db_path.exists(),
-        "index_ready": index_ready,
-        "index_count": index_count,
-        "index_model": index_model,
+        "index_ready": any(bool(item["available"]) for item in models),
+        "index_count": default["keyframes"] if default else None,
+        "index_model": default["model"] if default else None,
     }
 
 
@@ -86,10 +78,27 @@ def stats(request: Request) -> dict[str, int]:
         return get_stats(conn)
 
 
+@router.get("/models")
+def models(request: Request) -> list[dict[str, object]]:
+    return _service(request).models()
+
+
+@router.get("/objects")
+def objects(request: Request, limit: int = 200) -> list[dict[str, object]]:
+    cfg = _config(request)
+    with closing(connect(cfg.db_path)) as conn:
+        return object_facets(conn, max(1, min(limit, 500)))
+
+
 @router.post("/search", response_model=SearchResponse)
 def search(payload: SearchRequest, request: Request) -> SearchResponse:
     try:
-        return _service(request).search(payload.text, payload.top_k)
+        return _service(request).search(
+            payload.text,
+            payload.top_k,
+            objects=payload.objects,
+            model=payload.model,
+        )
     except IndexUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

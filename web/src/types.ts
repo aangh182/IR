@@ -40,8 +40,27 @@ export type Hit = {
   }
 }
 
+export type ModelInfo = {
+  name: string
+  model: string
+  dim: number
+  encoder: string
+  available: boolean
+  keyframes: number | null
+  default: boolean
+}
+
+export type ObjectFacet = {
+  label: string
+  keyframes: number
+  videos: number
+}
+
 export type SearchResponse = {
   query_id: string
+  query: string
+  translated_query: string
+  model: string
   elapsed_ms: number
   results: Hit[]
   dres_payload: unknown

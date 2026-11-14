@@ -10,7 +10,7 @@ state/
 artifacts_keyframes.zip
 artifacts_keyframes.zip.tmp
 kaggle_bundle/
-artifacts_embed_shards.zip
+artifacts_embed_shards*.zip
 models/
 web/node_modules/
 web/dist/

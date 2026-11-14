@@ -92,13 +92,21 @@ Toàn bộ state local nằm trong `state/` (không upload):
 state/
   metadata.sqlite
   follow_frames/<video_id>/g<generation>/*.webp
-  embed/
+  embed/                 # embedding profile "clip"
+    shards/<video_id>/...
+    embeddings.f16.npy
+    id_map.npy
+    faiss.index
+    manifest.json
+  embed_siglip2/         # embedding profile "siglip2"
     shards/<video_id>/...
     embeddings.f16.npy
     id_map.npy
     faiss.index
     manifest.json
 ```
+
+Các profile dùng chung `metadata.sqlite` và follow frames; chỉ thư mục index tách riêng.
 
 Repo cũ đang để DB/follow/embed trong `artifacts/`; chạy một lần `uv run ir migrate` để chuyển sang layout mới (không cần chạy lại keyframe).
 
@@ -127,6 +135,73 @@ Lệnh này giải nén vào `state/embed/shards/<video_id>/` và merge luôn. N
 `ir merge` đọc toàn bộ shard hiện có và build `embeddings.f16.npy`, `id_map.npy`, `faiss.index`, `manifest.json`. Có thể merge sau mỗi batch.
 
 Mỗi shard gồm `embeddings.f16.npy`, `id_map.npy`, `manifest.json`; notebook resume được theo từng video.
+
+### Nhiều embedding model (CLIP + SigLIP2)
+
+`config.yaml` khai báo `embed.profiles`; mỗi profile có `model`, `dim`, `encoder` và thư mục index
+riêng dưới `state/`. `embed.default` chọn profile mặc định.
+
+| profile | model | dim | encoder | index |
+| --- | --- | --- | --- | --- |
+| `clip` | `sentence-transformers/clip-ViT-B-16` | 512 | `sentence_transformers` | `state/embed` |
+| `siglip2` | `hf-hub:timm/ViT-B-16-SigLIP2-384` | 768 | `open_clip` | `state/embed_siglip2` |
+
+Hai index dùng chung DB và follow frames; chỉ model đang chọn được lazy-load khi search.
+
+```bash
+uv run ir models                                                     # profile + trạng thái index
+uv run ir import-shards artifacts_embed_shards_siglip2-384.zip --model siglip2
+uv run ir merge --model siglip2                                      # merge lại nếu cần
+uv run ir search "a person at a desk" --model siglip2
+uv run ir search "a person at a desk"                                # dùng embed.default (clip)
+```
+
+Web có dropdown `Model` (dữ liệu từ `GET /api/models`); `POST /api/search` nhận thêm
+`{"model": "siglip2"}`. Model không có index sẽ hiện `chưa có index` và bị disable.
+
+## Object tagging (Kaggle)
+
+`scripts/kaggle_objects.ipynb` chạy YOLO11 pretrained COCO (`yolo11x.pt`) trên từng keyframe
+trong bundle keyframe ở trên, rồi xuất **object shard theo video**:
+
+```
+objects_shards/
+  shards/<video_id>/objects.jsonl
+  shards/<video_id>/manifest.json
+```
+
+Mỗi dòng `objects.jsonl` lưu nhãn COCO duy nhất + số instance, không lưu bbox:
+
+```json
+{"kf_uid": 123, "video_id": "L01_V001", "generation": 0, "shot_idx": 4, "kf_idx": 1, "ts_ms": 16000, "objects": ["car", "person"], "counts": {"car": 2, "person": 1}}
+```
+
+Chạy notebook trên Kaggle (bật GPU + Internet, add dataset keyframe), tải
+`artifacts_objects_shards.zip` rồi import:
+
+```bash
+uv run ir import-objects artifacts_objects_shards.zip
+uv run ir objects          # xem nhãn + số keyframe
+```
+
+Import giải nén shard vào `state/objects/shards/<video_id>/` rồi ghi vào SQLite:
+`keyframes.objects`/`obj_count` và bảng `keyframe_objects` (label + count) để filter nhanh.
+Import lại cùng zip an toàn: nhãn của keyframe được thay thế, không cộng dồn. Keyframe
+không còn tồn tại (do reindex) bị bỏ qua và đếm ở `missing`.
+
+Object shard là artifact gốc (JSONL, dễ inspect); SQLite chỉ là index dẫn xuất. Có thể xoá
+`state/objects` rồi import lại bất cứ lúc nào.
+
+Filter theo object (nhiều nhãn là AND):
+
+```bash
+uv run ir search "a person at a desk" --object person
+uv run ir search "a red car" --object car --object person
+```
+
+Trên web, ô `Lọc object COCO` nhận danh sách nhãn cách nhau bởi dấu phẩy; các chip
+`Object có sẵn` lấy từ `GET /api/objects` để chọn nhanh. Kết quả trả thêm
+`evidence.objects` để hiển thị tag trên card.
 
 ## Chạy web UI
 
@@ -171,7 +246,8 @@ cổng `5173` và `8000` ở tab **PORTS**.
 
 ### 4. Dùng UI
 
-1. Gõ mô tả **tiếng Anh** vào ô tìm kiếm (hoặc bấm một ví dụ) → `Tìm`.
+1. Gõ mô tả **tiếng Việt** (hoặc tiếng Anh) vào ô tìm kiếm (hoặc bấm một ví dụ) → `Tìm`;
+   query được dịch sang tiếng Anh bằng Gemini trước khi search.
 2. Grid kết quả hiện keyframe kèm score; bấm một card để chọn.
 3. Panel phải: player tự seek tới frame, dải thumbnail bên dưới cho chọn keyframe
    hoặc follow frame đúng nhất.
@@ -265,7 +341,29 @@ cd web && npm run dev
 - Web UI: grid keyframe, click → player seek, dải thumbnail chọn frame đúng nhất, copy DRES payload theo frame được chọn.
 - DRES: `GET /api/dres/status`, `POST /api/dres/submit` — xem [Chạy web UI](#chạy-web-ui).
 
-Hiện search nhận query tiếng Anh; lớp dịch vi→en chưa thêm.
+Query tiếng Việt được dịch sang tiếng Anh bằng Gemini trước khi encode CLIP. Cấu hình trong
+`config.yaml`:
+
+```yaml
+translate:
+  enabled: true
+  model: gemini-3.1-flash-lite
+  api_key: null          # không đặt key trong file này (được git track)
+  api_key_env: GEMINI_API_KEY
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  timeout_sec: 15.0
+```
+
+API key lấy theo thứ tự: env `GEMINI_API_KEY` (hoặc `GOOGLE_API_KEY`) → `translate.api_key`
+→ file `state/gemini_api_key` (gitignored):
+
+```bash
+printf 'your-gemini-api-key' > state/gemini_api_key
+chmod 600 state/gemini_api_key
+```
+
+Nếu thiếu key hoặc Gemini lỗi, search dùng query gốc. Response có thêm `query` và
+`translated_query`; CLI in bản dịch trước danh sách kết quả.
 
 ## Chạy keyframe
 
@@ -311,4 +409,4 @@ uv run ruff check .
 
 ## Cấu trúc
 
-`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite + FAISS), `search` (CLIP encoder + search service), `api` (FastAPI), `cli`; `web/` là Vite React UI; `scripts/kaggle_embed.ipynb` là notebook embed trên Kaggle. `artifacts/` chỉ chứa keyframe + `manifest.jsonl` để upload Kaggle; `state/` chứa DB, follow frames, embeddings và FAISS index (cả hai đều gitignored).
+`config.yaml` cấu hình pipeline; `src/ir/` gồm `config`, `types`, `store` (SQLite + FAISS), `search` (CLIP encoder + search service), `api` (FastAPI), `cli`; `web/` là Vite React UI; `scripts/kaggle_embed.ipynb` là notebook embed trên Kaggle; `scripts/kaggle_objects.ipynb` là notebook YOLO11 object tagging. `artifacts/` chỉ chứa keyframe + `manifest.jsonl` để upload Kaggle; `state/` chứa DB, follow frames, embeddings và FAISS index (cả hai đều gitignored).

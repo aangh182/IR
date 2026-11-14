@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import zipfile
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .config import AppConfig
 from .index.manifest import write_keyframe_manifest
 from .index.merge import MergeReport, merge_shards
-from .store.db import connect, init_db
+from .store.db import connect, init_db, set_keyframe_objects
 
 BUNDLE_README = """AIC2024 KIS - keyframe bundle for Kaggle
 Contents:
@@ -84,16 +86,113 @@ def _copy_shards(source: Path, destination: Path) -> None:
         shutil.copytree(child, target)
 
 
-def import_shards(cfg: AppConfig, source: Path, run_merge: bool = True) -> MergeReport | None:
-    destination = cfg.embeddings_dir
+@dataclass(frozen=True)
+class ObjectImportReport:
+    videos: int
+    keyframes: int
+    labels: int
+    missing: int
+
+
+def _read_object_counts(record: dict) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    raw_counts = record.get("counts")
+    if isinstance(raw_counts, dict):
+        for label, value in raw_counts.items():
+            name = str(label).strip().lower()
+            if name:
+                counts[name] = max(1, int(value))
+    for label in record.get("objects") or []:
+        name = str(label).strip().lower()
+        if name and name not in counts:
+            counts[name] = 1
+    return counts
+
+
+def _existing_uids(conn, uids: list[int]) -> set[int]:
+    found: set[int] = set()
+    for start in range(0, len(uids), 500):
+        chunk = uids[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"SELECT kf_uid FROM keyframes WHERE kf_uid IN ({placeholders})", chunk
+        ).fetchall()
+        found.update(int(row["kf_uid"]) for row in rows)
+    return found
+
+
+def import_objects(cfg: AppConfig, source: Path) -> ObjectImportReport:
+    init_db(cfg.db_path)
+    destination = cfg.objects_dir
     destination.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
         _copy_shards(source, destination)
     else:
         with zipfile.ZipFile(source) as archive:
             _extract_shards(archive, destination)
-    if not cfg.shards_dir.is_dir():
-        raise FileNotFoundError(f"Không thấy shards sau khi giải nén: {cfg.shards_dir}")
+
+    root = cfg.objects_shards_dir
+    if not root.is_dir():
+        raise FileNotFoundError(f"Không thấy object shards sau khi giải nén: {root}")
+
+    videos = 0
+    keyframes = 0
+    missing = 0
+    labels: set[str] = set()
+
+    with closing(connect(cfg.db_path)) as conn:
+        for shard_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            objects_path = shard_dir / "objects.jsonl"
+            if not objects_path.is_file():
+                continue
+            records = []
+            for line in objects_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                counts = _read_object_counts(record)
+                records.append((int(record["kf_uid"]), counts))
+
+            if not records:
+                videos += 1
+                continue
+
+            existing = _existing_uids(conn, [uid for uid, _ in records])
+            for kf_uid, counts in records:
+                if kf_uid not in existing:
+                    missing += 1
+                    continue
+                set_keyframe_objects(conn, kf_uid, counts)
+                keyframes += 1
+                labels.update(counts)
+            videos += 1
+            conn.commit()
+
+    return ObjectImportReport(
+        videos=videos,
+        keyframes=keyframes,
+        labels=len(labels),
+        missing=missing,
+    )
+
+
+def import_shards(
+    cfg: AppConfig,
+    source: Path,
+    run_merge: bool = True,
+    profile: str | None = None,
+) -> MergeReport | None:
+    spec = cfg.embed_profile(profile)
+    destination = cfg.embeddings_dir_for(spec.name)
+    destination.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        _copy_shards(source, destination)
+    else:
+        with zipfile.ZipFile(source) as archive:
+            _extract_shards(archive, destination)
+    shards_dir = cfg.shards_dir_for(spec.name)
+    if not shards_dir.is_dir():
+        raise FileNotFoundError(f"Không thấy shards sau khi giải nén: {shards_dir}")
     if not run_merge:
         return None
-    return merge_shards(cfg)
+    return merge_shards(cfg, profile=spec.name)

@@ -87,6 +87,9 @@ class DresPayload(BaseModel):
 
 class SearchResponse(BaseModel):
     query_id: str
+    query: str = ""
+    translated_query: str = ""
+    model: str = ""
     elapsed_ms: int
     results: list[Hit] = Field(default_factory=list)
     dres_payload: DresPayload | None = None

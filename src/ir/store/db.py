@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..types import FollowFrame, Keyframe, Shot, Video
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS keyframes (
 
 CREATE INDEX IF NOT EXISTS idx_keyframes_video_ts
     ON keyframes (video_id, ts_ms);
+
+CREATE TABLE IF NOT EXISTS keyframe_objects (
+    kf_uid INTEGER NOT NULL REFERENCES keyframes(kf_uid) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kf_uid, label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyframe_objects_label
+    ON keyframe_objects (label, kf_uid);
 
 CREATE TABLE IF NOT EXISTS follow_frames (
     video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
@@ -245,6 +255,69 @@ def insert_keyframe(conn: sqlite3.Connection, keyframe: Keyframe) -> int:
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def set_keyframe_objects(conn: sqlite3.Connection, kf_uid: int, counts: dict[str, int]) -> None:
+    labels = sorted(counts)
+    conn.execute(
+        "UPDATE keyframes SET objects = ?, obj_count = ? WHERE kf_uid = ?",
+        (",".join(labels), sum(counts.values()), kf_uid),
+    )
+    conn.execute("DELETE FROM keyframe_objects WHERE kf_uid = ?", (kf_uid,))
+    if counts:
+        conn.executemany(
+            "INSERT INTO keyframe_objects (kf_uid, label, count) VALUES (?, ?, ?)",
+            [(kf_uid, label, int(counts[label])) for label in labels],
+        )
+
+
+def keyframe_uids_with_objects(
+    conn: sqlite3.Connection, kf_uids: list[int], labels: list[str]
+) -> set[int]:
+    if not kf_uids or not labels:
+        return set(kf_uids)
+
+    label_placeholders = ",".join("?" for _ in labels)
+    found: set[int] = set()
+    for start in range(0, len(kf_uids), 500):
+        chunk = kf_uids[start : start + 500]
+        uid_placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT kf_uid FROM keyframe_objects
+            WHERE kf_uid IN ({uid_placeholders}) AND label IN ({label_placeholders})
+            GROUP BY kf_uid
+            HAVING COUNT(DISTINCT label) = ?
+            """,
+            [*chunk, *labels, len(labels)],
+        ).fetchall()
+        found.update(int(row["kf_uid"]) for row in rows)
+    return found
+
+
+def object_facets(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT o.label,
+               COUNT(*) AS keyframes,
+               COUNT(DISTINCT k.video_id) AS videos
+        FROM keyframe_objects o
+        JOIN keyframes k ON k.kf_uid = o.kf_uid
+        JOIN videos v ON v.video_id = k.video_id AND v.generation = k.generation
+        GROUP BY o.label
+        ORDER BY keyframes DESC, o.label
+        LIMIT ?
+        """,
+        (max(1, limit),),
+    ).fetchall()
+    return [
+        {
+            "label": str(row["label"]),
+            "keyframes": int(row["keyframes"]),
+            "videos": int(row["videos"]),
+        }
+        for row in rows
+    ]
 
 
 def delete_keyframes(conn: sqlite3.Connection, video_id: str, generation: int) -> int:

@@ -49,11 +49,22 @@ class IngestConfig(BaseModel):
     decode_threads: int = 2
 
 
+class EmbedProfile(BaseModel):
+    name: str
+    model: str
+    dim: int
+    dir: Path | None = None
+    encoder: Literal["sentence_transformers", "open_clip"] = "sentence_transformers"
+    fp16: bool | None = None
+
+
 class EmbedConfig(BaseModel):
     model: str = "sentence-transformers/clip-ViT-B-16"
     dim: int = 512
     batch_size: int = 128
     fp16: bool = True
+    default: str = "clip"
+    profiles: list[EmbedProfile] = Field(default_factory=list)
 
 
 class OcrConfig(BaseModel):
@@ -69,7 +80,7 @@ class AsrConfig(BaseModel):
 
 
 class ObjectsConfig(BaseModel):
-    model: str = "yolov8x.pt"
+    model: str = "yolo11x.pt"
     conf: float = 0.25
 
 
@@ -102,7 +113,11 @@ class SearchConfig(BaseModel):
 
 class TranslateConfig(BaseModel):
     enabled: bool = True
-    model: str = "VietAI/envit5-translation"
+    model: str = "gemini-3.1-flash-lite"
+    api_key: str | None = None
+    api_key_env: str = "GEMINI_API_KEY"
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    timeout_sec: float = 15.0
 
 
 class DresConfig(BaseModel):
@@ -159,9 +174,37 @@ class AppConfig(BaseModel):
     def follow_frames_dir(self) -> Path:
         return self.state_root / "follow_frames"
 
+    def embed_profiles(self) -> dict[str, EmbedProfile]:
+        profiles = {profile.name: profile for profile in self.embed.profiles}
+        if self.embed.default not in profiles:
+            profiles[self.embed.default] = EmbedProfile(
+                name=self.embed.default,
+                model=self.embed.model,
+                dim=self.embed.dim,
+                dir=Path("embed"),
+                fp16=self.embed.fp16,
+            )
+        return profiles
+
+    def embed_profile(self, name: str | None = None) -> EmbedProfile:
+        key = name or self.embed.default
+        profiles = self.embed_profiles()
+        if key not in profiles:
+            available = ", ".join(sorted(profiles))
+            raise ValueError(f"unknown embedding model {key!r}; available: {available}")
+        return profiles[key]
+
+    def embeddings_dir_for(self, name: str | None = None) -> Path:
+        profile = self.embed_profile(name)
+        directory = profile.dir or Path("embed")
+        return directory if directory.is_absolute() else self.state_root / directory
+
+    def shards_dir_for(self, name: str | None = None) -> Path:
+        return self.embeddings_dir_for(name) / "shards"
+
     @property
     def embeddings_dir(self) -> Path:
-        return self.state_root / "embed"
+        return self.embeddings_dir_for()
 
     @property
     def embeddings_path(self) -> Path:
@@ -181,7 +224,15 @@ class AppConfig(BaseModel):
 
     @property
     def shards_dir(self) -> Path:
-        return self.embeddings_dir / "shards"
+        return self.shards_dir_for()
+
+    @property
+    def objects_dir(self) -> Path:
+        return self.state_root / "objects"
+
+    @property
+    def objects_shards_dir(self) -> Path:
+        return self.objects_dir / "shards"
 
 
 def _resolve(base: Path, value: str | Path) -> Path:

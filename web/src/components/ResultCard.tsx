@@ -37,6 +37,18 @@ export function ResultCard({ hit, selected, onSelect }: Props) {
         <p className="text-xs text-slate-400">
           shot {hit.shot_idx} · {formatMs(hit.start_ms)} → {formatMs(hit.end_ms)}
         </p>
+        {hit.evidence.objects.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-1">
+            {hit.evidence.objects.slice(0, 6).map((label) => (
+              <span
+                key={label}
+                className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </button>
   )

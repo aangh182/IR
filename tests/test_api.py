@@ -5,9 +5,9 @@ from contextlib import closing
 from fastapi.testclient import TestClient
 
 from ir.api.main import create_app
-from ir.config import AppConfig
-from ir.store.db import connect, init_db, upsert_video
-from ir.types import Video
+from ir.config import AppConfig, EmbedConfig, EmbedProfile
+from ir.store.db import connect, init_db, insert_keyframe, set_keyframe_objects, upsert_video
+from ir.types import Keyframe, Video
 
 
 def test_health_and_stats(tmp_path) -> None:
@@ -40,6 +40,69 @@ def test_search_without_index_returns_503(tmp_path) -> None:
 
     assert response.status_code == 503
     assert "embedding" in response.json()["detail"].lower()
+
+
+def test_models_and_unknown_model(tmp_path) -> None:
+    cfg = AppConfig(
+        artifacts_dir=tmp_path / "artifacts",
+        embed=EmbedConfig(
+            default="clip",
+            profiles=[
+                EmbedProfile(name="clip", model="clip-model", dim=2, dir="embed"),
+                EmbedProfile(
+                    name="siglip2",
+                    model="siglip-model",
+                    dim=3,
+                    dir="embed_siglip2",
+                    encoder="open_clip",
+                ),
+            ],
+        ),
+    )
+
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        response = client.get("/api/models")
+        unknown = client.post(
+            "/api/search", json={"text": "a person", "model": "missing"}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["name"] for item in body] == ["clip", "siglip2"]
+    assert body[0]["default"] is True
+    assert body[1]["encoder"] == "open_clip"
+    assert all(item["available"] is False for item in body)
+    assert unknown.status_code == 400
+
+
+def test_object_facets(tmp_path) -> None:
+    cfg = AppConfig(artifacts_dir=tmp_path / "artifacts")
+    init_db(cfg.db_path)
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(conn, Video(video_id="V1", path="/videos/V1.mp4", duration_ms=5000))
+        uid = insert_keyframe(
+            conn,
+            Keyframe(
+                video_id="V1",
+                shot_idx=0,
+                kf_idx=0,
+                ts_ms=1000,
+                path="keyframes/V1/g0/000000_000.jpg",
+            ),
+        )
+        set_keyframe_objects(conn, uid, {"person": 2, "car": 1})
+        conn.commit()
+
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        response = client.get("/api/objects")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"label": "car", "keyframes": 1, "videos": 1},
+        {"label": "person", "keyframes": 1, "videos": 1},
+    ]
 
 
 def test_stream_video_supports_range(tmp_path) -> None:

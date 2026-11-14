@@ -74,17 +74,24 @@ def merge(
     output: Annotated[
         Path | None, typer.Option(help="Thư mục output; mặc định cạnh thư mục shards.")
     ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding profile (ví dụ clip, siglip2)."),
+    ] = None,
 ) -> None:
     from .index.merge import merge_shards
 
     cfg = load_config()
     try:
-        report = merge_shards(cfg, shards, output)
+        report = merge_shards(cfg, shards, output, profile=profile)
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}")
+    typer.echo(
+        f"merged model={cfg.embed_profile(profile).name} "
+        f"videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}"
+    )
 
 
 @app.command("export-keyframes")
@@ -115,6 +122,10 @@ def import_shards(
     merge: Annotated[
         bool, typer.Option("--merge/--no-merge", help="Merge ngay sau khi giải nén.")
     ] = True,
+    profile: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding profile (ví dụ clip, siglip2)."),
+    ] = None,
 ) -> None:
     from .kaggle import import_shards as run_import
 
@@ -124,15 +135,84 @@ def import_shards(
 
     cfg = load_config()
     try:
-        report = run_import(cfg, source, merge)
+        report = run_import(cfg, source, merge, profile=profile)
     except (FileNotFoundError, ValueError, zipfile.BadZipFile) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
+    name = cfg.embed_profile(profile).name
     if report is None:
-        typer.echo(f"shards -> {cfg.shards_dir}")
+        typer.echo(f"shards[{name}] -> {cfg.shards_dir_for(name)}")
         return
-    typer.echo(f"merged videos={report.videos} keyframes={report.keyframes} -> {report.output_dir}")
+    typer.echo(
+        f"merged model={name} videos={report.videos} keyframes={report.keyframes} "
+        f"-> {report.output_dir}"
+    )
+
+
+@app.command("import-objects")
+def import_objects(
+    source: Annotated[
+        Path, typer.Argument(help="File zip object shard tải từ Kaggle, hoặc thư mục đã giải nén.")
+    ],
+) -> None:
+    from .kaggle import import_objects as run_import
+
+    if not source.exists():
+        typer.echo(f"Không thấy: {source}", err=True)
+        raise typer.Exit(code=1)
+
+    cfg = load_config()
+    try:
+        report = run_import(cfg, source)
+    except (FileNotFoundError, ValueError, zipfile.BadZipFile) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"objects videos={report.videos} keyframes={report.keyframes} "
+        f"labels={report.labels} missing={report.missing}"
+    )
+
+
+@app.command("models")
+def models() -> None:
+    from .search.service import SearchService
+
+    cfg = load_config()
+    entries = SearchService(cfg).models()
+    if not entries:
+        typer.echo("Chưa cấu hình embedding profile nào.")
+        return
+    for entry in entries:
+        marker = "*" if entry["default"] else " "
+        status = "ready" if entry["available"] else "missing"
+        count = entry["keyframes"]
+        count_text = f"{int(count):,} keyframes" if count is not None else "-"
+        typer.echo(
+            f"{marker} {str(entry['name']):>10}  {status:>7}  "
+            f"dim={entry['dim']:<4}  {count_text:<16}  {entry['model']}"
+        )
+
+
+@app.command("objects")
+def objects(
+    limit: Annotated[int, typer.Option("--limit", "-n", min=1, max=500)] = 50,
+) -> None:
+    from .store.db import object_facets
+
+    cfg = load_config()
+    init_db(cfg.db_path)
+    with closing(connect(cfg.db_path)) as conn:
+        facets = object_facets(conn, limit)
+    if not facets:
+        typer.echo("Chưa có object tag. Chạy notebook Kaggle rồi `uv run ir import-objects <zip>`.")
+        return
+    for facet in facets:
+        typer.echo(
+            f"{facet['label']:>20}  {facet['keyframes']:>8} keyframes  "
+            f"{facet['videos']:>5} videos"
+        )
 
 
 @app.command()
@@ -146,8 +226,18 @@ def migrate() -> None:
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="Mô tả sự kiện (tiếng Anh).")],
+    query: Annotated[
+        str, typer.Argument(help="Mô tả sự kiện (tiếng Việt, tự dịch sang tiếng Anh).")
+    ],
     top_k: Annotated[int, typer.Option("--top-k", "-k", min=1, max=50)] = 20,
+    object_filter: Annotated[
+        list[str] | None,
+        typer.Option("--object", "-o", help="Chỉ giữ keyframe có object (lặp lại được)."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding profile (ví dụ clip, siglip2)."),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="In JSON.")] = False,
 ) -> None:
     from .search.service import IndexUnavailableError, SearchService
@@ -155,7 +245,9 @@ def search(
     cfg = load_config()
     init_db(cfg.db_path)
     try:
-        response = SearchService(cfg).search(query, top_k)
+        response = SearchService(cfg).search(
+            query, top_k, objects=object_filter, model=model
+        )
     except (IndexUnavailableError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -164,6 +256,8 @@ def search(
         typer.echo(response.model_dump_json(indent=2))
         return
 
+    if response.translated_query and response.translated_query != response.query:
+        typer.echo(f"→ en: {response.translated_query}")
     typer.echo(f"{len(response.results)} kết quả · {response.elapsed_ms} ms")
     for rank, hit in enumerate(response.results, start=1):
         typer.echo(

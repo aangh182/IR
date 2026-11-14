@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import faiss
 import numpy as np
@@ -25,16 +26,21 @@ class FaissStore:
         return len(self.id_map)
 
     @classmethod
-    def load(cls, cfg: AppConfig) -> FaissStore:
-        required = {"faiss.index": cfg.faiss_path, "id_map.npy": cfg.id_map_path}
+    def load(cls, cfg: AppConfig, profile: str | None = None) -> FaissStore:
+        return cls.load_at(cfg.embeddings_dir_for(profile))
+
+    @classmethod
+    def load_at(cls, directory: str | Path) -> FaissStore:
+        root = Path(directory)
+        required = {"faiss.index": root / "faiss.index", "id_map.npy": root / "id_map.npy"}
         missing = [f"{name} ({path})" for name, path in required.items() if not path.is_file()]
         if missing:
             raise IndexUnavailableError(
                 "Chưa có embedding artifacts: " + ", ".join(missing)
             )
 
-        index = faiss.read_index(str(cfg.faiss_path))
-        id_map = np.load(cfg.id_map_path)
+        index = faiss.read_index(str(root / "faiss.index"))
+        id_map = np.load(root / "id_map.npy")
         if id_map.ndim != 1:
             raise IndexUnavailableError("id_map.npy phải là mảng 1 chiều")
         if index.ntotal != len(id_map):
@@ -42,8 +48,9 @@ class FaissStore:
                 f"faiss.ntotal={index.ntotal} != id_map={len(id_map)}"
             )
 
-        if cfg.embeddings_path.is_file():
-            embeddings = np.load(cfg.embeddings_path, mmap_mode="r")
+        embeddings_path = root / "embeddings.f16.npy"
+        if embeddings_path.is_file():
+            embeddings = np.load(embeddings_path, mmap_mode="r")
             expected = (len(id_map), index.d)
             if embeddings.shape != expected:
                 raise IndexUnavailableError(
@@ -52,8 +59,9 @@ class FaissStore:
             del embeddings
 
         model: str | None = None
-        if cfg.manifest_path.is_file():
-            manifest = json.loads(cfg.manifest_path.read_text(encoding="utf-8"))
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             model = manifest.get("model")
             count = manifest.get("count")
             if count is not None and int(count) != len(id_map):

@@ -37,6 +37,18 @@ embed:
   dim: 512
   batch_size: 128
   fp16: true
+  default: clip
+  profiles:
+    - name: clip
+      model: sentence-transformers/clip-ViT-B-16
+      dim: 512
+      dir: embed
+      encoder: sentence_transformers
+    - name: siglip2
+      model: hf-hub:timm/ViT-B-16-SigLIP2-384
+      dim: 768
+      dir: embed_siglip2
+      encoder: open_clip
 
 ocr:
   engine: null
@@ -49,7 +61,7 @@ asr:
   language: vi
 
 objects:
-  model: yolov8x.pt
+  model: yolo11x.pt
   conf: 0.25
 
 faiss:
@@ -73,7 +85,11 @@ search:
 
 translate:
   enabled: true
-  model: VietAI/envit5-translation
+  model: gemini-3.1-flash-lite
+  api_key: null          # không đặt key trong file này (được git track)
+  api_key_env: GEMINI_API_KEY
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  timeout_sec: 15.0
 
 dres:
   base_url: https://aiclub.uit.edu.vn/dres

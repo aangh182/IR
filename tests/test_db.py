@@ -11,6 +11,7 @@ from ir.store.db import (
     init_db,
     insert_follow_frame,
     insert_keyframe,
+    keyframe_uids_with_objects,
     load_follow_frames,
     upsert_video,
 )
@@ -118,6 +119,13 @@ def test_reindex_is_append_only_then_compact(tmp_path) -> None:
         "shots": 1,
         "asr_segments": 1,
     }
+
+
+def test_object_filter_chunks_large_uid_lists(tmp_path) -> None:
+    db_path = init_db(tmp_path / "metadata.sqlite")
+
+    with closing(connect(db_path)) as conn:
+        assert keyframe_uids_with_objects(conn, list(range(1, 2501)), ["person"]) == set()
 
 
 def test_follow_frames_roundtrip(tmp_path) -> None:

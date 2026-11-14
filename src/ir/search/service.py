@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -8,10 +9,19 @@ from contextlib import closing
 from urllib.parse import quote
 
 from ..config import AppConfig
-from ..store.db import connect
+from ..store.db import connect, keyframe_uids_with_objects
 from ..store.faiss_store import FaissStore, IndexUnavailableError
-from ..types import DresAnswer, DresAnswerSet, DresPayload, FrameOption, Hit, SearchResponse
+from ..types import (
+    DresAnswer,
+    DresAnswerSet,
+    DresPayload,
+    Evidence,
+    FrameOption,
+    Hit,
+    SearchResponse,
+)
 from .encoder import TextEncoder
+from .translate import GeminiTranslator
 
 __all__ = ["IndexUnavailableError", "SearchService"]
 
@@ -19,56 +29,136 @@ logger = logging.getLogger(__name__)
 
 
 class SearchService:
-    def __init__(self, cfg: AppConfig) -> None:
+    def __init__(
+        self, cfg: AppConfig, translator: GeminiTranslator | None = None
+    ) -> None:
         self.cfg = cfg
-        self._store: FaissStore | None = None
-        self._encoder: TextEncoder | None = None
-        self._load_lock = threading.Lock()
+        self._stores: dict[str, FaissStore] = {}
+        self._encoders: dict[str, TextEncoder] = {}
+        self._locks: dict[str, threading.Lock] = {}
+        self._registry_lock = threading.Lock()
+        self._translator = translator or GeminiTranslator(cfg)
 
-    def _ensure_loaded(self) -> tuple[FaissStore, TextEncoder]:
-        if self._store is not None and self._encoder is not None:
-            return self._store, self._encoder
+    def _model_lock(self, name: str) -> threading.Lock:
+        with self._registry_lock:
+            lock = self._locks.get(name)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[name] = lock
+            return lock
 
-        with self._load_lock:
-            if self._store is None:
+    def _ensure_loaded(
+        self, model: str | None = None
+    ) -> tuple[FaissStore, TextEncoder, str]:
+        profile = self.cfg.embed_profile(model)
+        name = profile.name
+        store = self._stores.get(name)
+        encoder = self._encoders.get(name)
+        if store is not None and encoder is not None:
+            return store, encoder, name
+
+        with self._model_lock(name):
+            store = self._stores.get(name)
+            encoder = self._encoders.get(name)
+            if store is None:
                 if not self.cfg.db_path.is_file():
                     raise IndexUnavailableError(f"Không thấy database: {self.cfg.db_path}")
-                store = FaissStore.load(self.cfg)
-                if store.model and store.model != self.cfg.embed.model:
+                directory = self.cfg.embeddings_dir_for(name)
+                try:
+                    store = FaissStore.load_at(directory)
+                except IndexUnavailableError as exc:
                     raise IndexUnavailableError(
-                        f"index model {store.model!r} != config {self.cfg.embed.model!r}"
-                    )
-                if store.dim != self.cfg.embed.dim:
+                        f"Chưa có embedding index cho model {name!r} "
+                        f"({profile.model}): {directory}"
+                    ) from exc
+                if store.model and store.model != profile.model:
                     raise IndexUnavailableError(
-                        f"index dim {store.dim} != config {self.cfg.embed.dim}"
+                        f"index model {store.model!r} != profile {profile.model!r}"
                     )
-                self._store = store
-            if self._encoder is None:
-                self._encoder = TextEncoder(self.cfg.embed.model, self.cfg.embed.dim)
-            return self._store, self._encoder
+                if store.dim != profile.dim:
+                    raise IndexUnavailableError(
+                        f"index dim {store.dim} != profile {name!r} dim {profile.dim}"
+                    )
+                self._stores[name] = store
+            if encoder is None:
+                fp16 = profile.fp16 if profile.fp16 is not None else self.cfg.embed.fp16
+                self._encoders[name] = TextEncoder(
+                    profile.model,
+                    profile.dim,
+                    backend=profile.encoder,
+                    fp16=fp16,
+                )
+            return self._stores[name], self._encoders[name], name
+
+    def models(self) -> list[dict[str, object]]:
+        entries: list[dict[str, object]] = []
+        for name, profile in self.cfg.embed_profiles().items():
+            directory = self.cfg.embeddings_dir_for(name)
+            available = (directory / "faiss.index").is_file() and (
+                directory / "id_map.npy"
+            ).is_file()
+            model = profile.model
+            count = None
+            manifest_path = directory / "manifest.json"
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    model = manifest.get("model") or model
+                    count = manifest.get("count")
+                except (OSError, ValueError):
+                    pass
+            entries.append(
+                {
+                    "name": name,
+                    "model": model,
+                    "dim": profile.dim,
+                    "encoder": profile.encoder,
+                    "available": available,
+                    "keyframes": int(count) if count is not None else None,
+                    "default": name == self.cfg.embed.default,
+                }
+            )
+        entries.sort(key=lambda item: (not bool(item["default"]), str(item["name"])))
+        return entries
 
     def warmup(self) -> None:
         try:
-            _, encoder = self._ensure_loaded()
+            _, encoder, _ = self._ensure_loaded()
             encoder.encode("warmup")
-        except IndexUnavailableError:
+        except (IndexUnavailableError, ValueError):
             return
         except Exception:
             logger.exception("search warmup failed")
 
-    def search(self, text: str, top_k: int | None = None) -> SearchResponse:
+    def search(
+        self,
+        text: str,
+        top_k: int | None = None,
+        objects: list[str] | None = None,
+        model: str | None = None,
+    ) -> SearchResponse:
         started = time.perf_counter()
         text = text.strip()
         if not text:
             raise ValueError("query rỗng")
 
+        labels = sorted(
+            {str(item).strip().lower() for item in (objects or []) if str(item).strip()}
+        )
         limit = min(max(top_k or self.cfg.search.top_k, 1), 50)
-        store, encoder = self._ensure_loaded()
-        vector = encoder.encode(text)
+        store, encoder, model_name = self._ensure_loaded(model)
+        query_en = self._translate(text)
+        vector = encoder.encode(query_en)
 
         candidate_k = min(store.count, max(limit * 10, 50))
-        candidates = store.search(vector, candidate_k)
-        hits = self._build_hits(candidates, limit)
+        while True:
+            candidates = store.search(vector, candidate_k)
+            if labels:
+                candidates = self._filter_candidates(candidates, labels)
+            hits = self._build_hits(candidates, limit)
+            if not labels or len(hits) >= limit or candidate_k >= store.count:
+                break
+            candidate_k = min(store.count, candidate_k * 2)
 
         payload = None
         if hits:
@@ -93,10 +183,30 @@ class SearchService:
 
         return SearchResponse(
             query_id=uuid.uuid4().hex,
+            query=text,
+            translated_query=query_en,
+            model=model_name,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
             results=hits,
             dres_payload=payload,
         )
+
+    def _filter_candidates(
+        self, candidates: list[tuple[float, int]], labels: list[str]
+    ) -> list[tuple[float, int]]:
+        if not candidates:
+            return []
+        uids = [kf_uid for _, kf_uid in candidates]
+        with closing(connect(self.cfg.db_path)) as conn:
+            allowed = keyframe_uids_with_objects(conn, uids, labels)
+        return [(score, kf_uid) for score, kf_uid in candidates if kf_uid in allowed]
+
+    def _translate(self, text: str) -> str:
+        try:
+            return self._translator.translate(text)
+        except Exception:
+            logger.exception("translate failed, dùng query gốc")
+            return text
 
     def _build_hits(self, candidates: list[tuple[float, int]], limit: int) -> list[Hit]:
         if not candidates:
@@ -108,7 +218,8 @@ class SearchService:
             rows = conn.execute(
                 f"""
                 SELECT k.kf_uid, k.video_id, k.generation, k.shot_idx, k.kf_idx,
-                       k.ts_ms, k.path, v.duration_ms, s.start_ms, s.end_ms
+                       k.ts_ms, k.path, k.objects, k.ocr_text,
+                       v.duration_ms, s.start_ms, s.end_ms
                 FROM keyframes k
                 JOIN videos v
                   ON v.video_id = k.video_id AND v.generation = k.generation
@@ -150,6 +261,14 @@ class SearchService:
                         score=score,
                         confidence=max(0.0, min(1.0, score)),
                         keyframe_url=f"/api/keyframes/{quote(relative)}",
+                        evidence=Evidence(
+                            ocr=str(row["ocr_text"] or ""),
+                            objects=[
+                                label
+                                for label in str(row["objects"] or "").split(",")
+                                if label
+                            ],
+                        ),
                     )
                 )
                 hit_rows.append(row)

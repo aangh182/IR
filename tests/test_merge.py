@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ir.config import AppConfig, EmbedConfig
+from ir.config import AppConfig, EmbedConfig, EmbedProfile
 from ir.index.merge import merge_shards
 from ir.store.faiss_store import FaissStore
 
@@ -69,6 +69,43 @@ def test_merge_shards_builds_combined_index(tmp_path) -> None:
 
     hits = store.search(np.array([0.0, 0.0, 1.0, 0.0]), 1)
     assert hits[0][1] == 5
+
+
+def test_merge_shards_into_named_profile(tmp_path) -> None:
+    cfg = AppConfig(
+        artifacts_dir=tmp_path / "artifacts",
+        embed=EmbedConfig(
+            default="clip",
+            profiles=[
+                EmbedProfile(name="clip", model="clip-model", dim=2, dir="embed"),
+                EmbedProfile(
+                    name="siglip2",
+                    model="siglip-model",
+                    dim=3,
+                    dir="embed_siglip2",
+                    encoder="open_clip",
+                ),
+            ],
+        ),
+    )
+    shards = cfg.shards_dir_for("siglip2")
+    _write_shard(
+        shards / "V1",
+        "V1",
+        [10],
+        np.array([[1.0, 0.0, 0.0]]),
+        model="siglip-model",
+    )
+
+    report = merge_shards(cfg, profile="siglip2")
+
+    output = cfg.embeddings_dir_for("siglip2")
+    assert report.output_dir == output
+    assert (output / "faiss.index").is_file()
+    assert (cfg.embeddings_dir_for("clip") / "faiss.index").is_file() is False
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model"] == "siglip-model"
+    assert manifest["dim"] == 3
 
 
 def test_merge_rejects_duplicate_ids(tmp_path) -> None:

@@ -41,8 +41,10 @@ def merge_shards(
     cfg: AppConfig,
     shards_dir: Path | None = None,
     output_dir: Path | None = None,
+    profile: str | None = None,
 ) -> MergeReport:
-    root = Path(shards_dir) if shards_dir is not None else cfg.shards_dir
+    spec = cfg.embed_profile(profile)
+    root = Path(shards_dir) if shards_dir is not None else cfg.shards_dir_for(spec.name)
     if not root.is_dir():
         raise FileNotFoundError(f"Không thấy thư mục shards: {root}")
 
@@ -63,19 +65,19 @@ def merge_shards(
 
         if ids.ndim != 1:
             raise ValueError(f"{shard_dir.name}: id_map phải là mảng 1 chiều")
-        if embeddings.shape != (len(ids), cfg.embed.dim):
+        if embeddings.shape != (len(ids), spec.dim):
             raise ValueError(
                 f"{shard_dir.name}: embeddings shape {embeddings.shape} "
-                f"!= ({len(ids)}, {cfg.embed.dim})"
+                f"!= ({len(ids)}, {spec.dim})"
             )
         if int(manifest.get("count", -1)) != len(ids):
             raise ValueError(
                 f"{shard_dir.name}: manifest.count {manifest.get('count')} != id_map {len(ids)}"
             )
         model = manifest.get("model")
-        if model and model != cfg.embed.model:
+        if model and model != spec.model:
             raise ValueError(
-                f"{shard_dir.name}: model {model!r} != config {cfg.embed.model!r}"
+                f"{shard_dir.name}: model {model!r} != config {spec.model!r}"
             )
         del embeddings
 
@@ -88,7 +90,11 @@ def merge_shards(
 
     order = np.argsort(all_ids, kind="stable")
     sorted_ids = all_ids[order].astype(np.int64)
-    output = Path(output_dir) if output_dir is not None else root.parent
+    output = (
+        Path(output_dir)
+        if output_dir is not None
+        else cfg.embeddings_dir_for(spec.name)
+    )
     output.mkdir(parents=True, exist_ok=True)
 
     embeddings_path = output / "embeddings.f16.npy"
@@ -97,7 +103,7 @@ def merge_shards(
         str(temporary_embeddings),
         mode="w+",
         dtype=np.float16,
-        shape=(len(sorted_ids), cfg.embed.dim),
+        shape=(len(sorted_ids), spec.dim),
     )
     for _, ids, shard_embeddings, _ in entries:
         positions = np.searchsorted(sorted_ids, ids)
@@ -109,7 +115,7 @@ def merge_shards(
     os.replace(temporary_embeddings, embeddings_path)
     _atomic_save(output / "id_map.npy", sorted_ids)
 
-    index = faiss.IndexFlatIP(cfg.embed.dim)
+    index = faiss.IndexFlatIP(spec.dim)
     memory_map = np.lib.format.open_memmap(str(embeddings_path), mode="r")
     for start in range(0, len(sorted_ids), BLOCK_SIZE):
         block = np.asarray(memory_map[start : start + BLOCK_SIZE], dtype=np.float32)
@@ -127,8 +133,8 @@ def merge_shards(
     manifest = {
         "version": 1,
         "created_at": datetime.now(UTC).isoformat(),
-        "model": cfg.embed.model,
-        "dim": cfg.embed.dim,
+        "model": spec.model,
+        "dim": spec.dim,
         "count": int(len(sorted_ids)),
         "dtype": "float16",
         "normalized": "l2",
