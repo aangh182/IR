@@ -31,7 +31,9 @@ export type Hit = {
   end_ms: number
   score: number
   confidence: number
+  kf_uid: number | null
   keyframe_url: string
+  is_boilerplate: boolean
   frames: FrameOption[]
   evidence: {
     ocr: string
@@ -47,6 +49,7 @@ export type ModelInfo = {
   encoder: string
   available: boolean
   keyframes: number | null
+  boilerplate: number | null
   default: boolean
 }
 

@@ -159,6 +159,78 @@ uv run ir search "a person at a desk"                                # dùng emb
 Web có dropdown `Model` (dữ liệu từ `GET /api/models`); `POST /api/search` nhận thêm
 `{"model": "siglip2"}`. Model không có index sẽ hiện `chưa có index` và bị disable.
 
+### Loại frame boilerplate (intro/logo lặp)
+
+Frame gần trùng xuất hiện ở nhiều video (intro bản tin, logo, studio...) được tính **offline**
+trên chính index hiện có, không cần embed lại:
+
+```bash
+uv run ir boilerplate --model clip
+uv run ir boilerplate --model siglip2          # threshold riêng trong config
+uv run ir boilerplate --model siglip2 --threshold 0.95   # override khi cần
+```
+
+Threshold mặc định theo profile:
+
+```yaml
+boilerplate:
+  threshold: 0.95
+  thresholds:
+    siglip2: 0.98
+  min_videos: 10
+  neighbors: 100
+  block: 4096
+```
+
+Mỗi frame lấy `neighbors` láng giềng trong FAISS; nếu có ít nhất `min_videos` video khác nhau
+với cosine `> threshold` thì đánh dấu boilerplate. Kết quả:
+
+```
+state/<profile>/boiler_mask.npy    # bool, cùng thứ tự với id_map.npy
+state/<profile>/boiler_meta.json   # threshold, min_videos, tỉ lệ, thời gian chạy
+```
+
+Mặc định search **ẩn** frame boilerplate. Bật lại bằng:
+
+```bash
+uv run ir search "..." --include-boilerplate
+```
+
+Web có checkbox `Hiện boilerplate`; khi bật, card boilerplate hiện badge màu vàng.
+Sau khi reindex/merge hoặc đổi threshold, chạy lại `ir boilerplate` và restart API để nạp mask mới.
+Có thể xem nhanh tỉ lệ trong `boiler_meta.json`; SigLIP2 thường cần threshold cao hơn CLIP
+(ví dụ 0.98) vì thang cosine khác.
+
+### Dedup ảnh gần trùng trong top-k
+
+Sau khi lọc boilerplate, top-k vẫn có thể chứa nhiều frame gần trùng (SigLIP2 hay gặp hơn CLIP).
+Search mặc định dedup: duyệt candidate theo score, bỏ candidate có cosine
+`> search.dedup_threshold` với candidate đã chọn, rồi mới cắt top-k.
+
+```yaml
+search:
+  dedup: true
+  dedup_threshold: 0.95
+```
+
+Tắt khi cần xem toàn bộ:
+
+```bash
+uv run ir search "..." --no-dedup
+```
+
+Web có checkbox `Dedup ảnh trùng`. Với query `technology company logos`, SigLIP2 từ
+31 cặp >0.95 trong top-50 (cao nhất 0.9984) giảm còn 0 cặp sau dedup; CLIP gần như không đổi.
+
+### Keyframe lân cận / tương tự trong grid
+
+- `Ctrl/Cmd + click` một keyframe: thay grid bằng các frame tương tự (image-to-image).
+- `Shift + click` một keyframe: thay grid bằng các keyframe cùng video theo thứ tự thời gian,
+  keyframe nguồn nằm giữa. Mặc định lấy `search.timeline_before` + `timeline_after` keyframe
+  hai bên (12/12).
+- Cả hai chế độ có banner nguồn với `Chạy lại` và `← Quay lại` để khôi phục kết quả trước đó.
+- API: `POST /api/similar` (`kf_uid`) và `POST /api/timeline` (`kf_uid`, `before`, `after`).
+
 ## Object tagging (Kaggle)
 
 `scripts/kaggle_objects.ipynb` chạy YOLO11 pretrained COCO (`yolo11x.pt`) trên từng keyframe

@@ -50,6 +50,15 @@ embed:
       dir: embed_siglip2
       encoder: open_clip
 
+boilerplate:
+  enabled: true
+  threshold: 0.95
+  thresholds:
+    siglip2: 0.98
+  min_videos: 10
+  neighbors: 100
+  block: 4096
+
 ocr:
   engine: null
   language: vi
@@ -74,6 +83,10 @@ search:
   top_k: 20
   rrf_k: 60
   temporal_window: 1
+  dedup: true
+  dedup_threshold: 0.95
+  timeline_before: 12
+  timeline_after: 12
   weights:
     dense: 1.0
     ocr: 0.5

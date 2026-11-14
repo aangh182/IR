@@ -131,6 +131,7 @@ def test_search_dedups_by_shot_and_builds_payload(tmp_path, monkeypatch) -> None
     assert len(response.results) == 2
     assert {hit.shot_idx for hit in response.results} == {0, 1}
     assert response.results[0].video_id == "V1"
+    assert response.results[0].kf_uid == uids[0]
     assert response.results[0].keyframe_url.startswith("/api/keyframes/V1/g0/")
 
     by_shot = {hit.shot_idx: hit for hit in response.results}
@@ -203,9 +204,11 @@ def test_search_filters_by_object(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(service_module, "TextEncoder", lambda *args, **kwargs: encoder)
     service = SearchService(cfg, translator=_Translator())
 
-    person = service.search("a person", top_k=10, objects=["PERSON"])
-    car = service.search("a person", top_k=10, objects=["car"])
-    both = service.search("a person", top_k=10, objects=["person", "car"])
+    person = service.search("a person", top_k=10, objects=["PERSON"], dedup=False)
+    car = service.search("a person", top_k=10, objects=["car"], dedup=False)
+    both = service.search(
+        "a person", top_k=10, objects=["person", "car"], dedup=False
+    )
 
     assert [hit.shot_idx for hit in person.results] == [0, 1]
     assert [hit.shot_idx for hit in car.results] == [1, 2]
@@ -302,6 +305,217 @@ def test_search_selects_model_and_lazy_loads(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(ValueError):
         service.search("q", model="missing")
+
+
+def test_search_hides_boilerplate_by_default(tmp_path, monkeypatch) -> None:
+    cfg = AppConfig(
+        corpus_dir=tmp_path / "corpus",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    init_db(cfg.db_path)
+
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(
+            conn,
+            Video(video_id="V1", path=str(tmp_path / "V1.mp4"), duration_ms=60_000),
+        )
+        conn.execute(
+            "INSERT INTO shots (video_id, generation, shot_idx, start_ms, end_ms) "
+            "VALUES ('V1', 0, 0, 0, 10000), ('V1', 0, 1, 10000, 20000)"
+        )
+        conn.commit()
+        uids = [
+            insert_keyframe(
+                conn,
+                Keyframe(
+                    video_id="V1",
+                    shot_idx=shot_idx,
+                    kf_idx=0,
+                    ts_ms=(shot_idx + 1) * 1000,
+                    path=f"keyframes/V1/g0/{shot_idx:06d}_000.jpg",
+                ),
+            )
+            for shot_idx in range(2)
+        ]
+
+    vectors = np.zeros((2, cfg.embed.dim), dtype=np.float32)
+    vectors[0, 0] = 1.0
+    vectors[1, 1] = 1.0
+    _write_embeddings(cfg.embeddings_dir, vectors, np.asarray(uids), cfg.embed.model)
+    np.save(cfg.boilerplate_mask_path, np.array([True, False]))
+
+    query = vectors[0].copy()
+    faiss.normalize_L2(query.reshape(1, -1))
+    encoder = _FakeEncoder(query)
+    monkeypatch.setattr(service_module, "TextEncoder", lambda *args, **kwargs: encoder)
+    service = SearchService(cfg, translator=_Translator())
+
+    hidden = service.search("q", top_k=2)
+    shown = service.search("q", top_k=2, include_boilerplate=True)
+
+    assert [hit.shot_idx for hit in hidden.results] == [1]
+    assert [hit.shot_idx for hit in shown.results] == [0, 1]
+    assert shown.results[0].is_boilerplate is True
+    assert shown.results[1].is_boilerplate is False
+
+    cfg.boilerplate_meta_path.write_text(
+        json.dumps({"id_map_sha256": "stale"}), encoding="utf-8"
+    )
+    stale_service = SearchService(cfg, translator=_Translator())
+    stale = stale_service.search("q", top_k=2)
+
+    assert [hit.shot_idx for hit in stale.results] == [0, 1]
+    assert all(not hit.is_boilerplate for hit in stale.results)
+
+
+def test_search_dedups_near_duplicate_candidates(tmp_path, monkeypatch) -> None:
+    cfg = AppConfig(
+        corpus_dir=tmp_path / "corpus",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    init_db(cfg.db_path)
+
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(
+            conn,
+            Video(video_id="V1", path=str(tmp_path / "V1.mp4"), duration_ms=60_000),
+        )
+        conn.execute(
+            "INSERT INTO shots (video_id, generation, shot_idx, start_ms, end_ms) "
+            "VALUES ('V1', 0, 0, 0, 10000), ('V1', 0, 1, 10000, 20000), "
+            "('V1', 0, 2, 20000, 30000)"
+        )
+        conn.commit()
+        uids = [
+            insert_keyframe(
+                conn,
+                Keyframe(
+                    video_id="V1",
+                    shot_idx=shot_idx,
+                    kf_idx=0,
+                    ts_ms=(shot_idx + 1) * 1000,
+                    path=f"keyframes/V1/g0/{shot_idx:06d}_000.jpg",
+                ),
+            )
+            for shot_idx in range(3)
+        ]
+
+    vectors = np.zeros((3, cfg.embed.dim), dtype=np.float32)
+    vectors[0, 0] = 1.0
+    vectors[1, 0] = 1.0
+    vectors[1, 1] = 0.01
+    vectors[2, 1] = 1.0
+    _write_embeddings(cfg.embeddings_dir, vectors, np.asarray(uids), cfg.embed.model)
+
+    query = vectors[0].copy()
+    faiss.normalize_L2(query.reshape(1, -1))
+    encoder = _FakeEncoder(query)
+    monkeypatch.setattr(service_module, "TextEncoder", lambda *args, **kwargs: encoder)
+    service = SearchService(cfg, translator=_Translator())
+
+    deduped = service.search("q", top_k=3)
+    raw = service.search("q", top_k=3, dedup=False)
+
+    assert [hit.shot_idx for hit in deduped.results] == [0, 2]
+    assert [hit.shot_idx for hit in raw.results] == [0, 1, 2]
+
+
+def test_timeline_returns_chronological_keyframes_without_shot_dedup(tmp_path) -> None:
+    cfg = AppConfig(
+        corpus_dir=tmp_path / "corpus",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    init_db(cfg.db_path)
+
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(
+            conn,
+            Video(video_id="V1", path=str(tmp_path / "V1.mp4"), duration_ms=60_000),
+        )
+        uids = [
+            insert_keyframe(
+                conn,
+                Keyframe(
+                    video_id="V1",
+                    shot_idx=0,
+                    kf_idx=kf_idx,
+                    ts_ms=(kf_idx + 1) * 1000,
+                    path=f"keyframes/V1/g0/000000_{kf_idx:03d}.jpg",
+                ),
+            )
+            for kf_idx in range(5)
+        ]
+
+    service = SearchService(cfg, translator=_Translator())
+    response = service.timeline(uids[2], before=2, after=2)
+
+    assert response.query.startswith("timeline:V1@")
+    assert response.model == ""
+    assert [hit.kf_uid for hit in response.results] == uids
+    assert response.results[2].kf_uid == uids[2]
+    assert all(hit.score == 0.0 for hit in response.results)
+    assert response.dres_payload is not None
+    answer = response.dres_payload.answerSets[0].answers[0]
+    assert answer.media_item_name == "V1"
+
+    with pytest.raises(ValueError):
+        service.timeline(999_999)
+
+
+def test_search_similar_uses_keyframe_embedding(tmp_path, monkeypatch) -> None:
+    cfg = AppConfig(
+        corpus_dir=tmp_path / "corpus",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    init_db(cfg.db_path)
+
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(
+            conn,
+            Video(video_id="V1", path=str(tmp_path / "V1.mp4"), duration_ms=60_000),
+        )
+        conn.execute(
+            "INSERT INTO shots (video_id, generation, shot_idx, start_ms, end_ms) "
+            "VALUES ('V1', 0, 0, 0, 10000), ('V1', 0, 1, 10000, 20000), "
+            "('V1', 0, 2, 20000, 30000)"
+        )
+        conn.commit()
+        uids = [
+            insert_keyframe(
+                conn,
+                Keyframe(
+                    video_id="V1",
+                    shot_idx=shot_idx,
+                    kf_idx=0,
+                    ts_ms=(shot_idx + 1) * 1000,
+                    path=f"keyframes/V1/g0/{shot_idx:06d}_000.jpg",
+                ),
+            )
+            for shot_idx in range(3)
+        ]
+
+    vectors = np.zeros((3, cfg.embed.dim), dtype=np.float32)
+    vectors[0, 0] = 1.0
+    vectors[1, 0] = 1.0
+    vectors[1, 1] = 0.01
+    vectors[2, 1] = 1.0
+    _write_embeddings(cfg.embeddings_dir, vectors, np.asarray(uids), cfg.embed.model)
+
+    monkeypatch.setattr(
+        service_module,
+        "TextEncoder",
+        lambda *args, **kwargs: _FakeEncoder(np.zeros(cfg.embed.dim, dtype=np.float32)),
+    )
+    service = SearchService(cfg, translator=_Translator())
+
+    response = service.search_similar(uids[0], top_k=3, dedup=False)
+
+    assert response.query.startswith("similar:V1@")
+    assert [hit.shot_idx for hit in response.results] == [1, 2]
+    assert [hit.kf_uid for hit in response.results] == [uids[1], uids[2]]
+
+    with pytest.raises(ValueError):
+        service.search_similar(999_999)
 
 
 def test_search_rejects_empty_query(tmp_path, monkeypatch) -> None:

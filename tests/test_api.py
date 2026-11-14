@@ -42,6 +42,48 @@ def test_search_without_index_returns_503(tmp_path) -> None:
     assert "embedding" in response.json()["detail"].lower()
 
 
+def test_timeline_route(tmp_path) -> None:
+    cfg = AppConfig(artifacts_dir=tmp_path / "artifacts")
+    init_db(cfg.db_path)
+    with closing(connect(cfg.db_path)) as conn:
+        upsert_video(conn, Video(video_id="V1", path="/videos/V1.mp4", duration_ms=5000))
+        uids = [
+            insert_keyframe(
+                conn,
+                Keyframe(
+                    video_id="V1",
+                    shot_idx=0,
+                    kf_idx=kf_idx,
+                    ts_ms=(kf_idx + 1) * 1000,
+                    path=f"keyframes/V1/g0/000000_{kf_idx:03d}.jpg",
+                ),
+            )
+            for kf_idx in range(3)
+        ]
+
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/timeline",
+            json={"kf_uid": uids[1], "before": 1, "after": 1},
+        )
+        missing = client.post("/api/timeline", json={"kf_uid": 999_999})
+
+    assert response.status_code == 200
+    assert [item["kf_uid"] for item in response.json()["results"]] == uids
+    assert missing.status_code == 400
+
+
+def test_similar_without_index_returns_503(tmp_path) -> None:
+    app = create_app(AppConfig(artifacts_dir=tmp_path / "artifacts"))
+
+    with TestClient(app) as client:
+        response = client.post("/api/similar", json={"kf_uid": 1})
+
+    assert response.status_code == 503
+    assert "embedding" in response.json()["detail"].lower()
+
+
 def test_models_and_unknown_model(tmp_path) -> None:
     cfg = AppConfig(
         artifacts_dir=tmp_path / "artifacts",

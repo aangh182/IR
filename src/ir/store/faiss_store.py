@@ -76,6 +76,22 @@ class FaissStore:
             model=model,
         )
 
+    def vectors_for(self, kf_uids: list[int]) -> np.ndarray:
+        if not kf_uids:
+            return np.empty((0, self.dim), dtype=np.float32)
+        ids = np.asarray(kf_uids, dtype=np.int64)
+        positions = np.searchsorted(self.id_map, ids)
+        positions = np.clip(positions, 0, len(self.id_map) - 1)
+        if not np.array_equal(self.id_map[positions], ids):
+            raise KeyError("unknown kf_uid")
+        try:
+            vectors = self.index.reconstruct_batch(positions)
+        except AttributeError:
+            vectors = np.vstack(
+                [self.index.reconstruct(int(position)) for position in positions]
+            )
+        return np.asarray(vectors, dtype=np.float32)
+
     def search(self, vector: np.ndarray, k: int) -> list[tuple[float, int]]:
         if k <= 0 or self.index.ntotal == 0:
             return []

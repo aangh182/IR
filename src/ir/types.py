@@ -64,7 +64,9 @@ class Hit(BaseModel):
     end_ms: int
     score: float
     confidence: float
+    kf_uid: int | None = None
     keyframe_url: str = ""
+    is_boilerplate: bool = False
     frames: list[FrameOption] = Field(default_factory=list)
     evidence: Evidence = Field(default_factory=Evidence)
 

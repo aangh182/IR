@@ -67,6 +67,15 @@ class EmbedConfig(BaseModel):
     profiles: list[EmbedProfile] = Field(default_factory=list)
 
 
+class BoilerplateConfig(BaseModel):
+    enabled: bool = True
+    threshold: float = 0.95
+    thresholds: dict[str, float] = Field(default_factory=dict)
+    min_videos: int = 10
+    neighbors: int = 100
+    block: int = 4096
+
+
 class OcrConfig(BaseModel):
     engine: str | None = None
     language: str = "vi"
@@ -107,6 +116,10 @@ class SearchConfig(BaseModel):
     top_k: int = 20
     rrf_k: int = 60
     temporal_window: int = 1
+    dedup: bool = True
+    dedup_threshold: float = 0.95
+    timeline_before: int = 12
+    timeline_after: int = 12
     weights: Weights = Field(default_factory=Weights)
     boost: Boost = Field(default_factory=Boost)
 
@@ -143,6 +156,7 @@ class AppConfig(BaseModel):
     keyframe: KeyframeConfig = Field(default_factory=KeyframeConfig)
     ingest: IngestConfig = Field(default_factory=IngestConfig)
     embed: EmbedConfig = Field(default_factory=EmbedConfig)
+    boilerplate: BoilerplateConfig = Field(default_factory=BoilerplateConfig)
     ocr: OcrConfig = Field(default_factory=OcrConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     objects: ObjectsConfig = Field(default_factory=ObjectsConfig)
@@ -225,6 +239,20 @@ class AppConfig(BaseModel):
     @property
     def shards_dir(self) -> Path:
         return self.shards_dir_for()
+
+    def boilerplate_mask_path_for(self, name: str | None = None) -> Path:
+        return self.embeddings_dir_for(name) / "boiler_mask.npy"
+
+    def boilerplate_meta_path_for(self, name: str | None = None) -> Path:
+        return self.embeddings_dir_for(name) / "boiler_meta.json"
+
+    @property
+    def boilerplate_mask_path(self) -> Path:
+        return self.boilerplate_mask_path_for()
+
+    @property
+    def boilerplate_meta_path(self) -> Path:
+        return self.boilerplate_meta_path_for()
 
     @property
     def objects_dir(self) -> Path:

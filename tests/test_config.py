@@ -13,6 +13,9 @@ def test_default_config_loads() -> None:
     assert cfg.artifacts_dir == REPO_ROOT / "artifacts"
     assert cfg.db_path.name == "metadata.sqlite"
     assert cfg.search.weights.dense == 1.0
+    assert cfg.search.dedup is True
+    assert cfg.search.dedup_threshold == 0.95
+    assert cfg.boilerplate.thresholds["siglip2"] == 0.98
 
 
 def test_embed_profiles_resolve_dirs(tmp_path) -> None:

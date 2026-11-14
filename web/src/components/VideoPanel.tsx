@@ -85,31 +85,43 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
   }
 
   return (
-    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-      <img
-        src={active.url}
-        alt={`${hit.video_id} @ ${formatMs(active.ts_ms)}`}
-        className="aspect-video w-full rounded-xl border border-slate-800 object-cover"
-      />
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>{frames.length} frame</span>
-          <span className="font-mono">
-            {activeIndex + 1}/{frames.length} · {offsetLabel}
+    <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-900">
+        <img
+          src={active.url}
+          alt={`${hit.video_id} @ ${formatMs(active.ts_ms)}`}
+          className="aspect-video w-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/75 to-transparent" />
+        <div className="absolute inset-x-2 bottom-2 flex items-end justify-between gap-2">
+          <span className="rounded bg-slate-950/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-200 backdrop-blur">
+            {formatMs(active.ts_ms)}
+          </span>
+          <span className="rounded bg-slate-950/75 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 backdrop-blur">
+            {offsetLabel}
           </span>
         </div>
-        <div className="flex gap-2 overflow-x-auto pb-1">
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          <span>{frames.length} frame</span>
+          <span className="font-mono tracking-normal">
+            {activeIndex + 1}/{frames.length}
+          </span>
+        </div>
+        <div className="scroll-slim flex gap-2 overflow-x-auto pb-1">
           {frames.map((frame, index) => (
             <button
               key={`${frame.ts_ms}-${index}`}
               type="button"
               onClick={() => setActiveIdx(index)}
+              aria-pressed={index === activeIndex}
               title={formatMs(frame.ts_ms)}
-              className={`relative w-20 shrink-0 overflow-hidden rounded-lg border transition ${
+              className={`relative w-20 shrink-0 overflow-hidden rounded-md border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 ${
                 index === activeIndex
-                  ? 'border-indigo-400'
-                  : 'border-slate-700 hover:border-slate-500'
+                  ? 'border-amber-500'
+                  : 'border-slate-300 hover:border-slate-400'
               }`}
             >
               <img
@@ -122,7 +134,7 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
                 {formatMs(frame.ts_ms)}
               </span>
               {frame.is_keyframe && (
-                <span className="absolute left-1 top-1 rounded bg-indigo-500/90 px-1 text-[9px] font-semibold text-white">
+                <span className="absolute left-1 top-1 rounded bg-amber-500 px-1 text-[9px] font-semibold text-slate-950">
                   key
                 </span>
               )}
@@ -131,7 +143,7 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-black">
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-black">
         <video
           key={hit.video_id}
           ref={videoRef}
@@ -145,44 +157,42 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
       </div>
 
       {videoError && (
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+        <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
           Không stream được video này. Kiểm tra file gốc còn trong `minibatch/` không.
         </p>
       )}
 
-      <div>
-        <p className="font-mono text-lg font-semibold text-slate-100">{hit.video_id}</p>
-        <p className="text-xs text-slate-400">
-          shot {hit.shot_idx} · {formatMs(hit.start_ms)} → {formatMs(hit.end_ms)}
-        </p>
-      </div>
-
-      <dl className="grid grid-cols-3 gap-2 text-xs">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+      <dl className="grid grid-cols-3 gap-2 text-[11px]">
+        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
           <dt className="text-slate-500">Start</dt>
-          <dd className="mt-1 font-mono text-slate-200">{formatMs(active.start_ms)}</dd>
+          <dd className="mt-0.5 font-mono text-slate-900">{formatMs(active.start_ms)}</dd>
         </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
           <dt className="text-slate-500">End</dt>
-          <dd className="mt-1 font-mono text-slate-200">{formatMs(active.end_ms)}</dd>
+          <dd className="mt-0.5 font-mono text-slate-900">{formatMs(active.end_ms)}</dd>
         </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
           <dt className="text-slate-500">Score</dt>
-          <dd className="mt-1 font-mono text-slate-200">{hit.score.toFixed(4)}</dd>
+          <dd className="mt-0.5 font-mono text-amber-700">{hit.score.toFixed(4)}</dd>
         </div>
       </dl>
 
       <button
         type="button"
         onClick={() => void copyPayload()}
-        className="w-full rounded-lg bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-400"
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:border-amber-500 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
       >
         {copied ? 'Đã copy payload' : 'Copy DRES payload'}
       </button>
 
-      <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/80 p-3 font-mono text-[11px] leading-relaxed text-slate-400">
-        {JSON.stringify(payload, null, 2)}
-      </pre>
-    </div>
+      <details className="rounded-lg border border-slate-200 bg-slate-50">
+        <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-slate-600">
+          Payload DRES
+        </summary>
+        <pre className="max-h-40 overflow-auto border-t border-slate-200 p-3 font-mono text-[10px] leading-relaxed text-slate-600">
+          {JSON.stringify(payload, null, 2)}
+        </pre>
+      </details>
+    </section>
   )
 }

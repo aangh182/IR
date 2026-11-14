@@ -189,10 +189,55 @@ def models() -> None:
         status = "ready" if entry["available"] else "missing"
         count = entry["keyframes"]
         count_text = f"{int(count):,} keyframes" if count is not None else "-"
+        boilerplate = entry.get("boilerplate")
+        boiler_text = (
+            f"{int(boilerplate):,} boiler" if boilerplate is not None else "-"
+        )
         typer.echo(
             f"{marker} {str(entry['name']):>10}  {status:>7}  "
-            f"dim={entry['dim']:<4}  {count_text:<16}  {entry['model']}"
+            f"dim={entry['dim']:<4}  {count_text:<16}  {boiler_text:<14}  "
+            f"{entry['model']}"
         )
+
+
+@app.command()
+def boilerplate(
+    profile: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding profile (ví dụ clip, siglip2)."),
+    ] = None,
+    threshold: Annotated[
+        float | None, typer.Option(help="Ngưỡng cosine để coi là gần trùng.")
+    ] = None,
+    min_videos: Annotated[
+        int | None, typer.Option("--min-videos", help="Số video khác nhau tối thiểu.")
+    ] = None,
+    neighbors: Annotated[
+        int | None, typer.Option(help="Số láng giềng mỗi frame.")
+    ] = None,
+    block: Annotated[int | None, typer.Option(help="Số frame mỗi batch.")] = None,
+) -> None:
+    import logging
+
+    from .index.boilerplate import compute_boilerplate
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    cfg = load_config()
+    try:
+        report = compute_boilerplate(
+            cfg, profile, threshold, min_videos, neighbors, block
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    ratio = report.boilerplate / report.keyframes if report.keyframes else 0.0
+    typer.echo(
+        f"boilerplate model={report.profile} "
+        f"{report.boilerplate:,}/{report.keyframes:,} ({ratio:.1%}) "
+        f"videos={report.videos} missing={report.missing} "
+        f"in {report.elapsed_sec:.1f}s -> {report.mask_path}"
+    )
 
 
 @app.command("objects")
@@ -238,6 +283,14 @@ def search(
         str | None,
         typer.Option("--model", help="Embedding profile (ví dụ clip, siglip2)."),
     ] = None,
+    include_boilerplate: Annotated[
+        bool,
+        typer.Option("--include-boilerplate", help="Hiện cả frame boilerplate."),
+    ] = False,
+    dedup: Annotated[
+        bool,
+        typer.Option("--dedup/--no-dedup", help="Ẩn ảnh gần trùng trong top-k."),
+    ] = True,
     as_json: Annotated[bool, typer.Option("--json", help="In JSON.")] = False,
 ) -> None:
     from .search.service import IndexUnavailableError, SearchService
@@ -246,7 +299,12 @@ def search(
     init_db(cfg.db_path)
     try:
         response = SearchService(cfg).search(
-            query, top_k, objects=object_filter, model=model
+            query,
+            top_k,
+            objects=object_filter,
+            model=model,
+            include_boilerplate=include_boilerplate,
+            dedup=dedup,
         )
     except (IndexUnavailableError, ValueError) as exc:
         typer.echo(str(exc), err=True)

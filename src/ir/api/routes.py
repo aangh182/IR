@@ -34,6 +34,23 @@ class SearchRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
     objects: list[str] = Field(default_factory=list, max_length=20)
     model: str | None = None
+    include_boilerplate: bool = False
+    dedup: bool = True
+
+
+class SimilarRequest(BaseModel):
+    kf_uid: int = Field(ge=1)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    objects: list[str] = Field(default_factory=list, max_length=20)
+    model: str | None = None
+    include_boilerplate: bool = False
+    dedup: bool = True
+
+
+class TimelineRequest(BaseModel):
+    kf_uid: int = Field(ge=1)
+    before: int | None = Field(default=None, ge=0, le=100)
+    after: int | None = Field(default=None, ge=0, le=100)
 
 
 class DresSubmitRequest(BaseModel):
@@ -98,9 +115,40 @@ def search(payload: SearchRequest, request: Request) -> SearchResponse:
             payload.top_k,
             objects=payload.objects,
             model=payload.model,
+            include_boilerplate=payload.include_boilerplate,
+            dedup=payload.dedup,
         )
     except IndexUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/similar", response_model=SearchResponse)
+def similar(payload: SimilarRequest, request: Request) -> SearchResponse:
+    try:
+        return _service(request).search_similar(
+            payload.kf_uid,
+            payload.top_k,
+            objects=payload.objects,
+            model=payload.model,
+            include_boilerplate=payload.include_boilerplate,
+            dedup=payload.dedup,
+        )
+    except IndexUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/timeline", response_model=SearchResponse)
+def timeline(payload: TimelineRequest, request: Request) -> SearchResponse:
+    try:
+        return _service(request).timeline(
+            payload.kf_uid,
+            before=payload.before,
+            after=payload.after,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
