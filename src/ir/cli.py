@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import zipfile
@@ -170,6 +171,51 @@ def search(
             f"score={hit.score:.4f}"
         )
         typer.echo(f"    {hit.keyframe_url}")
+
+
+@app.command("dres-status")
+def dres_status() -> None:
+    from .dres import DresClient, DresError
+
+    cfg = load_config()
+    client = DresClient.from_config(cfg)
+    try:
+        user = client._request("GET", "/api/v2/user") or {}
+        evaluation = client.active_evaluation()
+        task = client.current_task(evaluation.id)
+    except DresError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"user      : {user.get('username')} ({user.get('role')})")
+    typer.echo(f"evaluation: {evaluation.name} [{evaluation.status}] {evaluation.id}")
+    if task is None:
+        typer.echo("task      : (none)")
+    else:
+        typer.echo(f"task      : {task.name} ({task.task_group}) {task.task_type}")
+
+
+@app.command("dres-submit")
+def dres_submit(
+    video_id: Annotated[str, typer.Argument(help="Video id, không kèm phần mở rộng.")],
+    start_ms: Annotated[int, typer.Argument(help="Thời điểm bắt đầu (ms).")],
+    end_ms: Annotated[int, typer.Argument(help="Thời điểm kết thúc (ms).")],
+) -> None:
+    from .dres import DresClient, DresError
+
+    if end_ms <= start_ms:
+        typer.echo("end_ms phải lớn hơn start_ms", err=True)
+        raise typer.Exit(code=1)
+
+    cfg = load_config()
+    client = DresClient.from_config(cfg)
+    try:
+        result = client.submit(video_id, start_ms, end_ms)
+    except DresError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @app.command()

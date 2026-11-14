@@ -105,6 +105,13 @@ class TranslateConfig(BaseModel):
     model: str = "VietAI/envit5-translation"
 
 
+class DresConfig(BaseModel):
+    base_url: str = "https://eventretrieval.one"
+    session_id: str | None = None
+    evaluation_id: str | None = None
+    timeout_sec: float = 15.0
+
+
 class ApiConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8000
@@ -127,6 +134,7 @@ class AppConfig(BaseModel):
     faiss: FaissConfig = Field(default_factory=FaissConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    dres: DresConfig = Field(default_factory=DresConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
 
     @property

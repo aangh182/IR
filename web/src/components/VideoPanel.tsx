@@ -5,6 +5,7 @@ import type { FrameOption, Hit } from '../types'
 
 type Props = {
   hit: Hit
+  onActiveFrameChange?: (frame: FrameOption) => void
 }
 
 function framesOf(hit: Hit): FrameOption[] {
@@ -36,7 +37,7 @@ function dresPayload(hit: Hit, frame: FrameOption) {
   }
 }
 
-export function VideoPanel({ hit }: Props) {
+export function VideoPanel({ hit, onActiveFrameChange }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [copied, setCopied] = useState(false)
   const [videoError, setVideoError] = useState(false)
@@ -54,6 +55,10 @@ export function VideoPanel({ hit }: Props) {
     offsetMs === 0 ? 'keyframe' : `${offsetMs > 0 ? '+' : ''}${offsetMs} ms`
 
   const payload = dresPayload(hit, active)
+
+  useEffect(() => {
+    onActiveFrameChange?.(active)
+  }, [active, onActiveFrameChange])
 
   useEffect(() => {
     const video = videoRef.current

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..config import AppConfig, load_config
 from ..search.service import SearchService
 from ..store.db import init_db
 from .routes import router
+
+WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 
 @asynccontextmanager
@@ -32,6 +36,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    if WEB_DIST.is_dir():
+        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
     return app
 
 

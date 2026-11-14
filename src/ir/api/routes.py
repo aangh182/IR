@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..config import AppConfig
+from ..dres import DresClient, DresError, dres_session
 from ..search.service import IndexUnavailableError, SearchService
 from ..store.db import connect, get_stats
 from ..types import SearchResponse
@@ -23,6 +24,12 @@ mimetypes.add_type("image/webp", ".webp")
 class SearchRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     top_k: int | None = Field(default=None, ge=1, le=50)
+
+
+class SubmitRequest(BaseModel):
+    video_id: str = Field(min_length=1)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
 
 
 def _config(request: Request) -> AppConfig:
@@ -74,6 +81,64 @@ def search(payload: SearchRequest, request: Request) -> SearchResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/dres/status")
+def dres_status(request: Request) -> dict[str, object]:
+    cfg = _config(request)
+    if not dres_session(cfg):
+        return {"configured": False, "user": None, "evaluation": None, "task": None}
+
+    try:
+        client = DresClient.from_config(cfg)
+        user = client._request("GET", "/api/v2/user") or {}
+        evaluation = client.active_evaluation()
+        task = client.current_task(evaluation.id)
+    except DresError as exc:
+        return {
+            "configured": True,
+            "user": None,
+            "evaluation": None,
+            "task": None,
+            "error": str(exc),
+        }
+
+    return {
+        "configured": True,
+        "base_url": client.base_url,
+        "user": {"id": user.get("id"), "username": user.get("username"), "role": user.get("role")},
+        "evaluation": {
+            "id": evaluation.id,
+            "name": evaluation.name,
+            "status": evaluation.status,
+            "type": evaluation.type,
+        },
+        "task": None
+        if task is None
+        else {
+            "name": task.name,
+            "task_group": task.task_group,
+            "task_type": task.task_type,
+            "duration": task.duration,
+            "is_visual": task.is_visual,
+        },
+    }
+
+
+@router.post("/dres/submit")
+def dres_submit(payload: SubmitRequest, request: Request) -> dict[str, object]:
+    cfg = _config(request)
+    if not dres_session(cfg):
+        raise HTTPException(status_code=400, detail="Chưa cấu hình DRES session id")
+    if payload.end_ms <= payload.start_ms:
+        raise HTTPException(status_code=400, detail="end_ms phải lớn hơn start_ms")
+
+    client = DresClient.from_config(cfg)
+    try:
+        result = client.submit(payload.video_id, payload.start_ms, payload.end_ms)
+    except DresError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return result
 
 
 @router.get("/keyframes/{path:path}")

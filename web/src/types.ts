@@ -46,3 +46,26 @@ export type SearchResponse = {
   results: Hit[]
   dres_payload: unknown
 }
+
+export type DresTask = {
+  name: string
+  task_group: string
+  task_type: string
+  duration: number | null
+  is_visual: boolean
+}
+
+export type DresStatus = {
+  configured: boolean
+  base_url?: string
+  user: { id: string; username: string; role: string } | null
+  evaluation: { id: string; name: string; status: string; type: string } | null
+  task: DresTask | null
+  error?: string
+}
+
+export type DresSubmitResult = {
+  status?: boolean
+  description?: string
+  submission?: string
+}

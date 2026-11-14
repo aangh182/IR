@@ -37,6 +37,8 @@ npm install
 npm run dev
 ```
 
+Chi tiết cách mở web, dùng UI và nộp bài DRES: xem [Chạy web UI](#chạy-web-ui).
+
 ## Index
 
 ```bash
@@ -126,6 +128,91 @@ Lệnh này giải nén vào `state/embed/shards/<video_id>/` và merge luôn. N
 
 Mỗi shard gồm `embeddings.f16.npy`, `id_map.npy`, `manifest.json`; notebook resume được theo từng video.
 
+## Chạy web UI
+
+Web là Vite React, nằm trong `web/` và gọi API qua proxy `/api` → `http://127.0.0.1:8000`.
+
+### 1. Bật API
+
+```bash
+uv run uvicorn ir.api.main:app --reload
+# hoặc: uv run ir serve --reload
+```
+
+### 2. Bật web
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+- Phải chạy trong `web/`, không phải thư mục gốc repo (gốc không có `package.json`).
+- Nếu shell có `NODE_ENV=production`, npm sẽ bỏ qua devDependencies và Vite không khởi động được:
+  dùng `NODE_ENV=development npm install --include=dev`.
+
+Vite lắng nghe `0.0.0.0:5173` (`strictPort`, không tự nhảy cổng) nên mở được cả từ máy khác:
+
+```
+http://<ip-máy-chạy>:5173
+```
+
+### 3. Mở web khi SSH từ máy khác subnet
+
+Nếu máy local và máy chạy web khác subnet thì chỉ cổng 22 tới được, không mở được
+`http://<ip>:5173` trực tiếp. Dùng SSH tunnel từ **máy local**:
+
+```bash
+ssh -L 5173:127.0.0.1:5173 -L 8000:127.0.0.1:8000 team06@<ip-máy-chạy>
+```
+
+rồi mở `http://localhost:5173` trên máy local. Với VS Code Remote-SSH thì forward
+cổng `5173` và `8000` ở tab **PORTS**.
+
+### 4. Dùng UI
+
+1. Gõ mô tả **tiếng Anh** vào ô tìm kiếm (hoặc bấm một ví dụ) → `Tìm`.
+2. Grid kết quả hiện keyframe kèm score; bấm một card để chọn.
+3. Panel phải: player tự seek tới frame, dải thumbnail bên dưới cho chọn keyframe
+   hoặc follow frame đúng nhất.
+4. Nút `Copy DRES payload` copy JSON `answerSets` của frame đang chọn.
+5. Panel `DRES` hiển thị user, evaluation và task đang chạy, tự làm mới mỗi 15 giây.
+
+### 5. Nộp bài lên DRES
+
+Chọn kết quả + frame rồi bấm `Nộp lên DRES`. Panel hiện kết quả trả về
+(`description`, `submission`). Mỗi truy vấn **không được nộp trùng**.
+
+Cấu hình trong `config.yaml`:
+
+```yaml
+dres:
+  base_url: https://aiclub.uit.edu.vn/dres
+  session_id: null      # không đặt token trong file này (được git track)
+  evaluation_id: null   # null = tự lấy evaluation đang ACTIVE
+  timeout_sec: 15.0
+```
+
+Session id lấy theo thứ tự: env `DRES_SESSION_ID` → `dres.session_id` trong config →
+file `state/dres_session` (gitignored). Cách dùng file:
+
+```bash
+printf 'your-session-id' > state/dres_session
+chmod 600 state/dres_session
+```
+
+Kiểm tra và nộp bằng CLI:
+
+```bash
+uv run ir dres-status                        # user, evaluation, task đang chạy
+uv run ir dres-submit L01_V001 12000 15000   # video_id start_ms end_ms
+```
+
+API tương ứng:
+
+- `GET /api/dres/status` — user + evaluation + task hiện tại.
+- `POST /api/dres/submit` — body `{video_id, start_ms, end_ms}`.
+
 ## Search
 
 ```bash
@@ -139,6 +226,7 @@ cd web && npm run dev
 - `GET /api/frames/{path}` — ảnh follow frame.
 - `GET /api/videos/{id}/stream` — video gốc, hỗ trợ HTTP Range.
 - Web UI: grid keyframe, click → player seek, dải thumbnail chọn frame đúng nhất, copy DRES payload theo frame được chọn.
+- DRES: `GET /api/dres/status`, `POST /api/dres/submit` — xem [Chạy web UI](#chạy-web-ui).
 
 Hiện search nhận query tiếng Anh; lớp dịch vi→en chưa thêm.
 

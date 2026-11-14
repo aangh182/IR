@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 
+import { DresPanel } from './components/DresPanel'
 import { ResultCard } from './components/ResultCard'
 import { VideoPanel } from './components/VideoPanel'
-import type { Health, Hit, SearchResponse, Stats } from './types'
+import type { FrameOption, Health, Hit, SearchResponse, Stats } from './types'
 
 const EXAMPLES = [
   'a person speaking at a conference',
@@ -33,6 +34,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeFrame, setActiveFrame] = useState<FrameOption | null>(null)
+  const handleActiveFrame = useCallback((frame: FrameOption) => setActiveFrame(frame), [])
 
   useEffect(() => {
     let cancelled = false
@@ -223,10 +226,14 @@ function App() {
 
           <aside className="lg:sticky lg:top-6 lg:self-start">
             {selected ? (
-              <VideoPanel
-                key={`${selected.video_id}-${selected.shot_idx}-${selected.start_ms}`}
-                hit={selected}
-              />
+              <div className="space-y-4">
+                <VideoPanel
+                  key={`${selected.video_id}-${selected.shot_idx}-${selected.start_ms}`}
+                  hit={selected}
+                  onActiveFrameChange={handleActiveFrame}
+                />
+                <DresPanel hit={selected} frame={activeFrame} />
+              </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">
                 Chọn một kết quả để xem frame và video.

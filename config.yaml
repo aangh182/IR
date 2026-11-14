@@ -75,6 +75,12 @@ translate:
   enabled: true
   model: VietAI/envit5-translation
 
+dres:
+  base_url: https://aiclub.uit.edu.vn/dres
+  session_id: null
+  evaluation_id: null
+  timeout_sec: 15.0
+
 api:
   host: 127.0.0.1
   port: 8000
