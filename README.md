@@ -264,16 +264,49 @@ không còn tồn tại (do reindex) bị bỏ qua và đếm ở `missing`.
 Object shard là artifact gốc (JSONL, dễ inspect); SQLite chỉ là index dẫn xuất. Có thể xoá
 `state/objects` rồi import lại bất cứ lúc nào.
 
-Filter theo object (nhiều nhãn là AND):
+Filter theo object (nhiều tag là AND). Mỗi tag nhận thêm số lượng tối thiểu phải có
+trong frame bằng hậu tố `:count`:
 
 ```bash
 uv run ir search "a person at a desk" --object person
 uv run ir search "a red car" --object car --object person
+uv run ir search "two people talking" --object person:2
+uv run ir search "crowded street" --object person:3 --object car:2
 ```
 
-Trên web, ô `Lọc object COCO` nhận danh sách nhãn cách nhau bởi dấu phẩy; các chip
-`Object có sẵn` lấy từ `GET /api/objects` để chọn nhanh. Kết quả trả thêm
-`evidence.objects` để hiển thị tag trên card.
+`GET /api/objects` trả mỗi nhãn kèm `category` (Người, Phương tiện, Động vật, Nhà bếp...),
+`keyframes` và `videos`, đã sort theo category. Trên web, nút `Object (COCO)` mở **drawer**:
+chọn nhiều tag theo category, mỗi tag có bộ tăng/giảm số lượng tối thiểu trong frame
+(`label:count`, mặc định 1) và xoá từng tag; bấm `Áp dụng` để chạy lại truy vấn hiện tại.
+Kết quả trả thêm `evidence.object_counts` (số instance mỗi nhãn trong keyframe) để card
+hiển thị `label ×N`.
+
+CLI nhận cùng cú pháp: `--object car:2`. `uv run ir objects` in nhãn theo category.
+
+## Caption + OCR (Kaggle)
+
+`scripts/kaggle_caption_ocr.ipynb` chạy `5CD-AI/Vintern-1B-v3_5` trên từng keyframe với một
+prompt duy nhất, model trả về JSON `{"image-captioning", "ocr"}`, và xuất **shard JSON theo
+video**. Notebook chỉ lưu JSON, chưa import vào SQLite/FAISS.
+
+```
+caption_ocr_shards/
+  shards/<video_id>/caption_ocr.jsonl
+  shards/<video_id>/manifest.json
+```
+
+Mỗi dòng `caption_ocr.jsonl`:
+
+```json
+{"kf_uid": 1, "video_id": "L01_V001", "generation": 0, "shot_idx": 0, "kf_idx": 0, "ts_ms": 2640, "caption": "Một nam phát thanh viên...", "ocr": "THỜI SỰ 19H", "parsed": true}
+```
+
+`ocr` là `""` khi ảnh không có chữ. `parsed=false` khi model không trả JSON hợp lệ; dòng đó
+giữ thêm `raw` để xử lý lại sau.
+
+Chọn batch giống notebook embedding: `VINTERN_VIDEO_OFFSET` + `VINTERN_VIDEO_LIMIT`, hoặc
+`VINTERN_VIDEO_IDS`. Resume theo từng video; đổi prompt/tham số sinh sẽ tự làm mới shard nhờ
+`plan_hash`. Tải `artifacts_caption_ocr_shards.zip` về máy để dùng cho phase OCR boost.
 
 ## Chạy web UI
 
@@ -385,6 +418,25 @@ file `state/dres_session` (gitignored). Cách dùng file:
 printf 'your-session-id' > state/dres_session
 chmod 600 state/dres_session
 ```
+
+Evaluation id lấy theo thứ tự: env `DRES_EVALUATION_ID` → `dres.evaluation_id` trong config →
+file `state/dres_evaluation` (gitignored, ghi bằng `ir dres-eval`).
+
+Khi tài khoản có nhiều đề cùng `ACTIVE` (ví dụ **Đề thi thử** và **Đề thi**), tool **không tự
+đoán**: search/status/submit báo cần chọn đề. Chọn một lần rồi CLI và web dùng chung:
+
+```bash
+uv run ir dres-status          # liệt kê các đề ACTIVE, đánh dấu đề đang chọn
+uv run ir dres-eval            # xem danh sách
+uv run ir dres-eval 2          # chọn theo index
+uv run ir dres-eval a64a8da4-… # hoặc chọn theo id
+uv run ir dres-eval ""         # bỏ chọn (quay lại trạng thái chưa chọn)
+```
+
+Trên web, panel DRES có dropdown **Đề đang chạy** khi có hơn một đề ACTIVE; nút
+`Nộp bài` bị disable cho tới khi chọn đề. `POST /api/dres/submit` nhận thêm `evaluation_id`
+để override cho một lần nộp; `GET /api/dres/status` trả `evaluations` + `needs_choice`, và
+`POST /api/dres/evaluation` lưu lựa chọn.
 
 Kiểm tra và nộp bằng CLI:
 

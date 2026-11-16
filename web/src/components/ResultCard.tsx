@@ -2,6 +2,7 @@ import { useRef } from 'react'
 
 import { formatMs } from '../format'
 import type { Hit } from '../types'
+import { useHoverZoom } from './HoverZoom'
 
 type Props = {
   hit: Hit
@@ -23,6 +24,7 @@ export function ResultCard({
   const similarAt = useRef(0)
   const keyframe = hit.frames.find((frame) => frame.is_keyframe)
   const displayTs = keyframe?.ts_ms ?? hit.start_ms
+  const { anchorRef, show, hide, node } = useHoverZoom<HTMLButtonElement>(hit.keyframe_url)
 
   function triggerSimilar() {
     const now = Date.now()
@@ -34,8 +36,13 @@ export function ResultCard({
   return (
     <button
       type="button"
+      ref={anchorRef}
       data-kf-uid={hit.kf_uid ?? undefined}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={hide}
       onClick={(event) => {
+        hide()
         if (event.shiftKey) {
           event.preventDefault()
           onTimeline(hit)
@@ -103,19 +110,35 @@ export function ResultCard({
 
         {hit.evidence.objects.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {hit.evidence.objects.slice(0, 5).map((label) => (
-              <span
-                key={label}
-                className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-600"
-              >
-                {label}
-              </span>
-            ))}
+            {[...hit.evidence.objects]
+              .sort(
+                (left, right) =>
+                  (hit.evidence.object_counts[right] ?? 0) -
+                  (hit.evidence.object_counts[left] ?? 0),
+              )
+              .slice(0, 5)
+              .map((label) => {
+                const count = hit.evidence.object_counts[label] ?? 0
+                return (
+                  <span
+                    key={label}
+                    className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-600"
+                  >
+                    {label}
+                    {count > 1 && (
+                      <span className="ml-0.5 font-mono text-[9px] text-slate-500">
+                        ×{count}
+                      </span>
+                    )}
+                  </span>
+                )
+              })}
           </div>
         )}
       </div>
 
       {selected && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-amber-500" />}
+      {node}
     </button>
   )
 }

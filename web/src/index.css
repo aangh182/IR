@@ -46,3 +46,30 @@ body {
 .scroll-slim::-webkit-scrollbar-track {
   background: transparent;
 }
+
+@keyframes hover-zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.hover-zoom {
+  animation: hover-zoom-in 140ms ease-out;
+  transform-origin: center;
+}
+
+.lightbox-figure {
+  animation: hover-zoom-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hover-zoom,
+  .lightbox-figure {
+    animation: none;
+  }
+}

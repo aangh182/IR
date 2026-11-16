@@ -12,6 +12,7 @@ from ir.dres import (
     normalize_video_id,
     qa_answer,
     raw_submission,
+    save_evaluation_id,
     trake_answer,
 )
 
@@ -175,6 +176,53 @@ def test_active_evaluation_raises_without_active_run(monkeypatch) -> None:
 
     with pytest.raises(DresError):
         _client().active_evaluation()
+
+
+def test_active_evaluation_refuses_to_guess_between_two_active(monkeypatch) -> None:
+    payload = [
+        {"id": "e1", "name": "Đề thi thử", "type": "SYNCHRONOUS", "status": "ACTIVE"},
+        {"id": "e2", "name": "Đề thi", "type": "SYNCHRONOUS", "status": "ACTIVE"},
+    ]
+    monkeypatch.setattr(DresClient, "_request", lambda self, *a, **k: payload)
+
+    selection = _client().resolve_evaluation()
+    assert selection.selected is None
+    assert selection.needs_choice is True
+    assert [item.id for item in selection.active] == ["e1", "e2"]
+
+    with pytest.raises(DresError) as excinfo:
+        _client().active_evaluation()
+    assert "Đề thi thử" in str(excinfo.value) and "Đề thi" in str(excinfo.value)
+
+
+def test_resolve_evaluation_keeps_full_active_list_when_explicit(monkeypatch) -> None:
+    payload = [
+        {"id": "e1", "name": "Đề thi thử", "type": "SYNCHRONOUS", "status": "ACTIVE"},
+        {"id": "e2", "name": "Đề thi", "type": "SYNCHRONOUS", "status": "ACTIVE"},
+    ]
+    monkeypatch.setattr(DresClient, "_request", lambda self, *a, **k: payload)
+
+    selection = _client(evaluation_id="e2").resolve_evaluation()
+    assert selection.selected is not None
+    assert selection.selected.name == "Đề thi"
+    assert selection.explicit is True
+    assert len(selection.active) == 2
+
+
+def test_evaluation_id_falls_back_to_state_file(tmp_path, monkeypatch) -> None:
+    cfg = AppConfig(
+        artifacts_dir=tmp_path / "artifacts",
+        dres=DresConfig(session_id="s"),
+    )
+
+    assert DresClient.from_config(cfg).evaluation_id is None
+
+    save_evaluation_id(cfg, "e2")
+    assert (cfg.state_root / "dres_evaluation").read_text(encoding="utf-8") == "e2"
+    assert DresClient.from_config(cfg).evaluation_id == "e2"
+
+    save_evaluation_id(cfg, None)
+    assert DresClient.from_config(cfg).evaluation_id is None
 
 
 def test_current_task_flags_visual_group(monkeypatch) -> None:

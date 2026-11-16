@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ..objects import category_of, category_rank
 from ..types import FollowFrame, Keyframe, Shot, Video
 
 SCHEMA_VERSION = "4"
@@ -272,12 +273,13 @@ def set_keyframe_objects(conn: sqlite3.Connection, kf_uid: int, counts: dict[str
 
 
 def keyframe_uids_with_objects(
-    conn: sqlite3.Connection, kf_uids: list[int], labels: list[str]
+    conn: sqlite3.Connection, kf_uids: list[int], filters: list[tuple[str, int]]
 ) -> set[int]:
-    if not kf_uids or not labels:
+    if not kf_uids or not filters:
         return set(kf_uids)
 
-    label_placeholders = ",".join("?" for _ in labels)
+    clauses = " OR ".join("(label = ? AND count >= ?)" for _ in filters)
+    clause_params = [value for label, minimum in filters for value in (label, minimum)]
     found: set[int] = set()
     for start in range(0, len(kf_uids), 500):
         chunk = kf_uids[start : start + 500]
@@ -285,14 +287,36 @@ def keyframe_uids_with_objects(
         rows = conn.execute(
             f"""
             SELECT kf_uid FROM keyframe_objects
-            WHERE kf_uid IN ({uid_placeholders}) AND label IN ({label_placeholders})
+            WHERE kf_uid IN ({uid_placeholders}) AND ({clauses})
             GROUP BY kf_uid
             HAVING COUNT(DISTINCT label) = ?
             """,
-            [*chunk, *labels, len(labels)],
+            [*chunk, *clause_params, len(filters)],
         ).fetchall()
         found.update(int(row["kf_uid"]) for row in rows)
     return found
+
+
+def object_counts_for(
+    conn: sqlite3.Connection, kf_uids: list[int]
+) -> dict[int, dict[str, int]]:
+    if not kf_uids:
+        return {}
+
+    counts: dict[int, dict[str, int]] = {}
+    for start in range(0, len(kf_uids), 500):
+        chunk = kf_uids[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT kf_uid, label, count FROM keyframe_objects
+            WHERE kf_uid IN ({placeholders})
+            """,
+            chunk,
+        ).fetchall()
+        for row in rows:
+            counts.setdefault(int(row["kf_uid"]), {})[str(row["label"])] = int(row["count"])
+    return counts
 
 
 def object_facets(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, object]]:
@@ -310,14 +334,23 @@ def object_facets(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, 
         """,
         (max(1, limit),),
     ).fetchall()
-    return [
+    facets = [
         {
             "label": str(row["label"]),
+            "category": category_of(str(row["label"])),
             "keyframes": int(row["keyframes"]),
             "videos": int(row["videos"]),
         }
         for row in rows
     ]
+    facets.sort(
+        key=lambda item: (
+            category_rank(str(item["category"])),
+            -int(item["keyframes"]),
+            str(item["label"]),
+        )
+    )
+    return facets
 
 
 def delete_keyframes(conn: sqlite3.Connection, video_id: str, generation: int) -> int:

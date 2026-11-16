@@ -39,6 +39,7 @@ export type Hit = {
     ocr: string
     asr: string
     objects: string[]
+    object_counts: Record<string, number>
   }
 }
 
@@ -55,8 +56,14 @@ export type ModelInfo = {
 
 export type ObjectFacet = {
   label: string
+  category: string
   keyframes: number
   videos: number
+}
+
+export type ObjectFilter = {
+  label: string
+  minCount: number
 }
 
 export type SearchResponse = {
@@ -77,11 +84,20 @@ export type DresTask = {
   is_visual: boolean
 }
 
+export type DresEvaluation = {
+  id: string
+  name: string
+  status: string
+  type: string
+}
+
 export type DresStatus = {
   configured: boolean
   base_url?: string
   user: { id: string; username: string; role: string } | null
-  evaluation: { id: string; name: string; status: string; type: string } | null
+  evaluation: DresEvaluation | null
+  evaluations?: DresEvaluation[]
+  needs_choice?: boolean
   task: DresTask | null
   error?: string
 }
@@ -96,6 +112,7 @@ export type DresSubmitRequest = {
   frame_ids?: number[] | null
   payload?: unknown
   task_id?: string | null
+  evaluation_id?: string | null
 }
 
 export type DresSubmitResult = {

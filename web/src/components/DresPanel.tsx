@@ -48,6 +48,18 @@ async function fetchStatus(): Promise<DresStatus> {
   return (await response.json()) as DresStatus
 }
 
+async function chooseEvaluation(evaluationId: string): Promise<void> {
+  const response = await fetch('/api/dres/evaluation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ evaluation_id: evaluationId }),
+  })
+  if (!response.ok) {
+    const body = (await response.json()) as { detail?: string }
+    throw new Error(body.detail ?? `HTTP ${response.status}`)
+  }
+}
+
 function buildAnswers(input: {
   kind: DresSubmitKind
   videoId: string
@@ -109,6 +121,9 @@ export function DresPanel({ hit, frame }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<DresSubmitResult | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [choosing, setChoosing] = useState(false)
+  const [choiceError, setChoiceError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -127,7 +142,21 @@ export function DresPanel({ hit, frame }: Props) {
       active = false
       window.clearInterval(timer)
     }
-  }, [])
+  }, [reloadKey])
+
+  async function pickEvaluation(evaluationId: string) {
+    if (!evaluationId || choosing) return
+    setChoosing(true)
+    setChoiceError(null)
+    try {
+      await chooseEvaluation(evaluationId)
+      setReloadKey((value) => value + 1)
+    } catch (err) {
+      setChoiceError(err instanceof Error ? err.message : 'Lỗi không xác định')
+    } finally {
+      setChoosing(false)
+    }
+  }
 
   const task = status?.task ?? null
   const kind = kindOverride ?? kindForTask(task?.task_group)
@@ -151,14 +180,15 @@ export function DresPanel({ hit, frame }: Props) {
       )
 
   async function submit() {
-    if (invalid || submitting || !status?.configured) return
+    if (invalid || submitting || !status?.configured || status?.needs_choice) return
     setSubmitting(true)
     setSubmitError(null)
     setResult(null)
     try {
+      const evaluationId = status?.evaluation?.id ?? null
       const payload: DresSubmitRequest =
         kind === 'raw'
-          ? { kind: 'raw', payload: JSON.parse(raw) }
+          ? { kind: 'raw', payload: JSON.parse(raw), evaluation_id: evaluationId }
           : kind === 'trake'
             ? {
                 kind,
@@ -167,10 +197,11 @@ export function DresPanel({ hit, frame }: Props) {
                   .split(',')
                   .map((part) => Number(part.trim()))
                   .filter((value) => Number.isFinite(value)),
+                evaluation_id: evaluationId,
               }
             : kind === 'qa'
-              ? { kind, video_id: videoId, ts_ms: tsMs, answer }
-              : { kind, video_id: videoId, ts_ms: tsMs }
+              ? { kind, video_id: videoId, ts_ms: tsMs, answer, evaluation_id: evaluationId }
+              : { kind, video_id: videoId, ts_ms: tsMs, evaluation_id: evaluationId }
 
       const response = await fetch('/api/dres/submit', {
         method: 'POST',
@@ -202,6 +233,37 @@ export function DresPanel({ hit, frame }: Props) {
           {status?.evaluation ? status.evaluation.status : ''}
         </p>
       </div>
+
+      {(status?.evaluations?.length ?? 0) > 1 && (
+        <label className="block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          Đề đang chạy
+          <select
+            value={status?.evaluation?.id ?? ''}
+            onChange={(event) => void pickEvaluation(event.target.value)}
+            disabled={choosing}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-base text-slate-900 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15 disabled:bg-slate-100 sm:text-[11px]"
+          >
+            {!status?.evaluation && <option value="">— chọn đề —</option>}
+            {status?.evaluations?.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} [{item.status}]
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {status?.needs_choice && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          Có nhiều đề đang ACTIVE. Chọn đề trước khi nộp bài để tránh nộp nhầm.
+        </p>
+      )}
+
+      {choiceError && (
+        <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+          {choiceError}
+        </p>
+      )}
 
       {status?.error && (
         <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-[11px] text-red-700">
@@ -321,7 +383,7 @@ export function DresPanel({ hit, frame }: Props) {
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={invalid || submitting || !status?.configured}
+          disabled={invalid || submitting || !status?.configured || status?.needs_choice}
           className="w-full rounded-lg bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
         >
           {submitting ? 'Đang nộp...' : 'Nộp bài (Submit)'}

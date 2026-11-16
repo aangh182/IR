@@ -209,11 +209,14 @@ def test_search_filters_by_object(tmp_path, monkeypatch) -> None:
     both = service.search(
         "a person", top_k=10, objects=["person", "car"], dedup=False
     )
+    car_two = service.search("a person", top_k=10, objects=["car:2"], dedup=False)
 
     assert [hit.shot_idx for hit in person.results] == [0, 1]
     assert [hit.shot_idx for hit in car.results] == [1, 2]
     assert [hit.shot_idx for hit in both.results] == [1]
+    assert [hit.shot_idx for hit in car_two.results] == [1]
     assert person.results[1].evidence.objects == ["car", "person"]
+    assert person.results[1].evidence.object_counts == {"car": 2, "person": 1}
 
 
 def test_search_selects_model_and_lazy_loads(tmp_path, monkeypatch) -> None:

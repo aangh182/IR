@@ -16,13 +16,16 @@ __all__ = [
     "DresClient",
     "DresError",
     "EvaluationInfo",
+    "EvaluationSelection",
     "SubmitOutcome",
     "TaskInfo",
     "answer_kind_for_group",
+    "dres_evaluation_id",
     "dres_session",
     "kis_answer",
     "qa_answer",
     "raw_submission",
+    "save_evaluation_id",
     "trake_answer",
 ]
 
@@ -33,6 +36,25 @@ def dres_session(cfg: AppConfig) -> str | None:
         or cfg.dres.session_id
         or _session_from_file(cfg)
     )
+
+
+def dres_evaluation_id(cfg: AppConfig) -> str | None:
+    return (
+        os.environ.get("DRES_EVALUATION_ID")
+        or cfg.dres.evaluation_id
+        or _evaluation_from_file(cfg)
+    )
+
+
+def save_evaluation_id(cfg: AppConfig, evaluation_id: str | None) -> None:
+    path = cfg.state_root / "dres_evaluation"
+    value = (evaluation_id or "").strip()
+    if not value:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+    path.chmod(0o600)
 
 
 class DresError(RuntimeError):
@@ -60,6 +82,21 @@ class EvaluationInfo:
     type: str
     status: str
     task_templates: list[TaskInfo]
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "ACTIVE"
+
+
+@dataclass(frozen=True)
+class EvaluationSelection:
+    selected: EvaluationInfo | None
+    active: list[EvaluationInfo]
+    explicit: bool
+
+    @property
+    def needs_choice(self) -> bool:
+        return self.selected is None and len(self.active) > 1
 
 
 @dataclass(frozen=True)
@@ -159,11 +196,10 @@ class DresClient:
     @classmethod
     def from_config(cls, cfg: AppConfig) -> DresClient:
         base_url = os.environ.get("DRES_BASE_URL") or cfg.dres.base_url
-        evaluation = os.environ.get("DRES_EVALUATION_ID") or cfg.dres.evaluation_id
         return cls(
             base_url,
             dres_session(cfg) or "",
-            evaluation_id=evaluation,
+            evaluation_id=dres_evaluation_id(cfg),
             timeout=cfg.dres.timeout_sec,
         )
 
@@ -227,16 +263,41 @@ class DresClient:
             for item in payload
         ]
 
-    def active_evaluation(self) -> EvaluationInfo:
+    def resolve_evaluation(self) -> EvaluationSelection:
+        evaluations = self.list_evaluations()
+        active = [item for item in evaluations if item.is_active]
+
         if self.evaluation_id:
-            for evaluation in self.list_evaluations():
-                if evaluation.id == self.evaluation_id:
-                    return evaluation
-            raise DresError(f"Không thấy evaluation {self.evaluation_id}")
-        active = [item for item in self.list_evaluations() if item.status == "ACTIVE"]
-        if not active:
-            raise DresError("Không có evaluation nào đang ACTIVE")
-        return active[0]
+            for evaluation in evaluations:
+                if evaluation.id != self.evaluation_id:
+                    continue
+                if any(item.id == evaluation.id for item in active):
+                    choices = active
+                else:
+                    choices = [*active, evaluation]
+                return EvaluationSelection(evaluation, choices, True)
+            known = ", ".join(
+                f"{item.name} ({item.id})" for item in active
+            ) or "(không có đề ACTIVE)"
+            raise DresError(
+                f"Không thấy evaluation {self.evaluation_id}. Đề đang ACTIVE: {known}",
+            )
+
+        if len(active) == 1:
+            return EvaluationSelection(active[0], active, False)
+        return EvaluationSelection(None, active, False)
+
+    def active_evaluation(self) -> EvaluationInfo:
+        selection = self.resolve_evaluation()
+        if selection.selected is not None:
+            return selection.selected
+        if selection.needs_choice:
+            names = ", ".join(f"{item.name} ({item.id})" for item in selection.active)
+            raise DresError(
+                f"Có {len(selection.active)} evaluation đang ACTIVE: {names}. "
+                "Chọn một evaluation trước khi nộp bài.",
+            )
+        raise DresError("Không có evaluation nào đang ACTIVE")
 
     def current_task(self, evaluation_id: str | None = None) -> TaskInfo | None:
         target = evaluation_id or self.evaluation_id
@@ -311,6 +372,14 @@ def _describe_submit_failure(
 
 def _session_from_file(cfg: AppConfig) -> str | None:
     path = cfg.state_root / "dres_session"
+    if not path.is_file():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
+def _evaluation_from_file(cfg: AppConfig) -> str | None:
+    path = cfg.state_root / "dres_evaluation"
     if not path.is_file():
         return None
     value = path.read_text(encoding="utf-8").strip()

@@ -125,7 +125,7 @@ def test_object_filter_chunks_large_uid_lists(tmp_path) -> None:
     db_path = init_db(tmp_path / "metadata.sqlite")
 
     with closing(connect(db_path)) as conn:
-        assert keyframe_uids_with_objects(conn, list(range(1, 2501)), ["person"]) == set()
+        assert keyframe_uids_with_objects(conn, list(range(1, 2501)), [("person", 1)]) == set()
 
 
 def test_follow_frames_roundtrip(tmp_path) -> None:

@@ -14,10 +14,12 @@ from ..config import AppConfig
 from ..dres import (
     DresClient,
     DresError,
+    EvaluationInfo,
     dres_session,
     kis_answer,
     qa_answer,
     raw_submission,
+    save_evaluation_id,
     trake_answer,
 )
 from ..search.service import IndexUnavailableError, SearchService
@@ -61,6 +63,11 @@ class DresSubmitRequest(BaseModel):
     frame_ids: list[int] | None = None
     payload: dict[str, Any] | None = None
     task_id: str | None = None
+    evaluation_id: str | None = None
+
+
+class DresEvaluationRequest(BaseModel):
+    evaluation_id: str | None = None
 
 
 def _config(request: Request) -> AppConfig:
@@ -162,8 +169,9 @@ def dres_status(request: Request) -> dict[str, object]:
     try:
         client = DresClient.from_config(cfg)
         user = client._request("GET", "/api/v2/user") or {}
-        evaluation = client.active_evaluation()
-        task = client.current_task(evaluation.id)
+        selection = client.resolve_evaluation()
+        evaluation = selection.selected
+        task = client.current_task(evaluation.id) if evaluation else None
     except DresError as exc:
         return {
             "configured": True,
@@ -177,12 +185,16 @@ def dres_status(request: Request) -> dict[str, object]:
         "configured": True,
         "base_url": client.base_url,
         "user": {"id": user.get("id"), "username": user.get("username"), "role": user.get("role")},
-        "evaluation": {
+        "evaluation": None
+        if evaluation is None
+        else {
             "id": evaluation.id,
             "name": evaluation.name,
             "status": evaluation.status,
             "type": evaluation.type,
         },
+        "evaluations": [_evaluation_payload(item) for item in selection.active],
+        "needs_choice": selection.needs_choice,
         "task": None
         if task is None
         else {
@@ -193,6 +205,25 @@ def dres_status(request: Request) -> dict[str, object]:
             "is_visual": task.is_visual,
         },
     }
+
+
+@router.post("/dres/evaluation")
+def dres_evaluation(payload: DresEvaluationRequest, request: Request) -> dict[str, object]:
+    cfg = _config(request)
+    if not dres_session(cfg):
+        raise HTTPException(status_code=400, detail="Chưa cấu hình DRES session id")
+
+    if payload.evaluation_id:
+        client = DresClient.from_config(cfg)
+        try:
+            known = {item.id for item in client.list_evaluations()}
+        except DresError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if payload.evaluation_id not in known:
+            raise HTTPException(status_code=404, detail="Không thấy evaluation")
+
+    save_evaluation_id(cfg, payload.evaluation_id)
+    return {"evaluation_id": payload.evaluation_id or None}
 
 
 @router.post("/dres/submit")
@@ -208,7 +239,11 @@ def dres_submit(payload: DresSubmitRequest, request: Request) -> dict[str, objec
 
     client = DresClient.from_config(cfg)
     try:
-        outcome = client.submit(answers, task_id=payload.task_id)
+        outcome = client.submit(
+            answers,
+            evaluation_id=payload.evaluation_id,
+            task_id=payload.task_id,
+        )
     except DresError as exc:
         status = 401 if exc.status == 401 else 502
         raise HTTPException(status_code=status, detail=str(exc)) from exc
@@ -247,6 +282,15 @@ def _dres_answers(payload: DresSubmitRequest) -> list[dict[str, Any]]:
         return [qa_answer(payload.answer, payload.video_id, payload.ts_ms)]
 
     return [kis_answer(payload.video_id, payload.ts_ms)]
+
+
+def _evaluation_payload(evaluation: EvaluationInfo) -> dict[str, object]:
+    return {
+        "id": evaluation.id,
+        "name": evaluation.name,
+        "status": evaluation.status,
+        "type": evaluation.type,
+    }
 
 
 def _verdict_category(verdict: str) -> str:

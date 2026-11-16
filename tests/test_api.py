@@ -142,8 +142,8 @@ def test_object_facets(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json() == [
-        {"label": "car", "keyframes": 1, "videos": 1},
-        {"label": "person", "keyframes": 1, "videos": 1},
+        {"label": "person", "category": "Người", "keyframes": 1, "videos": 1},
+        {"label": "car", "category": "Phương tiện", "keyframes": 1, "videos": 1},
     ]
 
 

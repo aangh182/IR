@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { formatMs } from '../format'
 import type { FrameOption, Hit } from '../types'
+import { ImageLightbox } from './ImageLightbox'
 
 type Props = {
   hit: Hit
@@ -42,6 +43,7 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
   const [copied, setCopied] = useState(false)
   const [videoError, setVideoError] = useState(false)
   const [activeIdx, setActiveIdx] = useState<number | null>(null)
+  const [lightbox, setLightbox] = useState(false)
 
   const frames = framesOf(hit)
   const keyframeIdx = Math.max(
@@ -101,6 +103,26 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
             {offsetLabel}
           </span>
         </div>
+        <button
+          type="button"
+          onClick={() => setLightbox(true)}
+          aria-label="Phóng to ảnh"
+          title="Phóng to ảnh"
+          className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-slate-950/70 text-slate-100 backdrop-blur transition hover:bg-slate-950/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3.5 w-3.5"
+            aria-hidden="true"
+          >
+            <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
+          </svg>
+        </button>
       </div>
 
       <div className="space-y-1.5">
@@ -193,6 +215,14 @@ export function VideoPanel({ hit, onActiveFrameChange }: Props) {
           {JSON.stringify(payload, null, 2)}
         </pre>
       </details>
+
+      {lightbox && (
+        <ImageLightbox
+          src={active.url}
+          caption={`${hit.video_id} · ${formatMs(active.ts_ms)}${active.is_keyframe ? ' · keyframe' : ' · follow frame'}`}
+          onClose={() => setLightbox(false)}
+        />
+      )}
     </section>
   )
 }

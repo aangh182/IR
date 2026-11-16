@@ -13,7 +13,8 @@ import faiss
 import numpy as np
 
 from ..config import AppConfig
-from ..store.db import connect, keyframe_uids_with_objects
+from ..objects import parse_object_filters
+from ..store.db import connect, keyframe_uids_with_objects, object_counts_for
 from ..store.faiss_store import FaissStore, IndexUnavailableError
 from ..types import (
     DresAnswer,
@@ -210,7 +211,7 @@ class SearchService:
             store,
             vector,
             limit,
-            self._normalize_labels(objects),
+            self._normalize_object_filters(objects),
             boilerplate,
             include_boilerplate,
             use_dedup,
@@ -251,7 +252,7 @@ class SearchService:
             store,
             vector,
             limit,
-            self._normalize_labels(objects),
+            self._normalize_object_filters(objects),
             boilerplate,
             include_boilerplate,
             use_dedup,
@@ -333,14 +334,14 @@ class SearchService:
         store: FaissStore,
         vector: np.ndarray,
         limit: int,
-        labels: list[str],
+        filters: list[tuple[str, int]],
         boilerplate: set[int] | None,
         include_boilerplate: bool,
         use_dedup: bool,
         exclude_kf_uid: int | None = None,
     ) -> list[Hit]:
         filtering = (
-            bool(labels)
+            bool(filters)
             or (bool(boilerplate) and not include_boilerplate)
             or use_dedup
         )
@@ -353,8 +354,8 @@ class SearchService:
                     for score, kf_uid in candidates
                     if kf_uid != exclude_kf_uid
                 ]
-            if labels:
-                candidates = self._filter_candidates(candidates, labels)
+            if filters:
+                candidates = self._filter_candidates(candidates, filters)
             if boilerplate and not include_boilerplate:
                 candidates = [
                     (score, kf_uid)
@@ -370,10 +371,10 @@ class SearchService:
         return hits
 
     @staticmethod
-    def _normalize_labels(objects: list[str] | None) -> list[str]:
-        return sorted(
-            {str(item).strip().lower() for item in (objects or []) if str(item).strip()}
-        )
+    def _normalize_object_filters(
+        objects: list[str] | None,
+    ) -> list[tuple[str, int]]:
+        return parse_object_filters(objects)
 
     def _keyframe_label(self, kf_uid: int) -> str:
         with closing(connect(self.cfg.db_path)) as conn:
@@ -442,13 +443,13 @@ class SearchService:
         return selected
 
     def _filter_candidates(
-        self, candidates: list[tuple[float, int]], labels: list[str]
+        self, candidates: list[tuple[float, int]], filters: list[tuple[str, int]]
     ) -> list[tuple[float, int]]:
         if not candidates:
             return []
         uids = [kf_uid for _, kf_uid in candidates]
         with closing(connect(self.cfg.db_path)) as conn:
-            allowed = keyframe_uids_with_objects(conn, uids, labels)
+            allowed = keyframe_uids_with_objects(conn, uids, filters)
         return [(score, kf_uid) for score, kf_uid in candidates if kf_uid in allowed]
 
     def _translate(self, text: str) -> str:
@@ -489,6 +490,7 @@ class SearchService:
             ).fetchall()
 
             by_uid = {int(row["kf_uid"]): row for row in rows}
+            object_counts = object_counts_for(conn, kf_uids)
             hits: list[Hit] = []
             hit_rows = []
             seen_shots: set[tuple[str, int]] = set()
@@ -527,6 +529,7 @@ class SearchService:
                                 for label in str(row["objects"] or "").split(",")
                                 if label
                             ],
+                            object_counts=dict(object_counts.get(kf_uid, {})),
                         ),
                     )
                 )

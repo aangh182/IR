@@ -253,7 +253,12 @@ def objects(
     if not facets:
         typer.echo("Chưa có object tag. Chạy notebook Kaggle rồi `uv run ir import-objects <zip>`.")
         return
+    current = None
     for facet in facets:
+        category = str(facet.get("category") or "")
+        if category != current:
+            typer.echo(f"[{category}]")
+            current = category
         typer.echo(
             f"{facet['label']:>20}  {facet['keyframes']:>8} keyframes  "
             f"{facet['videos']:>5} videos"
@@ -277,7 +282,11 @@ def search(
     top_k: Annotated[int, typer.Option("--top-k", "-k", min=1, max=50)] = 20,
     object_filter: Annotated[
         list[str] | None,
-        typer.Option("--object", "-o", help="Chỉ giữ keyframe có object (lặp lại được)."),
+        typer.Option(
+            "--object",
+            "-o",
+            help="Keyframe phải có object với số lượng tối thiểu: label hoặc label:count.",
+        ),
     ] = None,
     model: Annotated[
         str | None,
@@ -333,18 +342,76 @@ def dres_status() -> None:
     client = DresClient.from_config(cfg)
     try:
         user = client._request("GET", "/api/v2/user") or {}
-        evaluation = client.active_evaluation()
-        task = client.current_task(evaluation.id)
+        selection = client.resolve_evaluation()
+        evaluation = selection.selected
+        task = client.current_task(evaluation.id) if evaluation else None
     except DresError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
     typer.echo(f"user      : {user.get('username')} ({user.get('role')})")
-    typer.echo(f"evaluation: {evaluation.name} [{evaluation.status}] {evaluation.id}")
+    if evaluation is None:
+        typer.echo("evaluation: (chưa chọn)")
+    else:
+        typer.echo(f"evaluation: {evaluation.name} [{evaluation.status}] {evaluation.id}")
     if task is None:
         typer.echo("task      : (none)")
     else:
         typer.echo(f"task      : {task.name} ({task.task_group}) {task.task_type}")
+
+    if len(selection.active) > 1 or selection.needs_choice:
+        typer.echo("")
+        typer.echo("Các đề đang ACTIVE — chọn bằng `uv run ir dres-eval <index|id>`:")
+        for index, item in enumerate(selection.active, start=1):
+            mark = "*" if evaluation and item.id == evaluation.id else " "
+            typer.echo(f" {mark}{index}. {item.name}  {item.id}")
+
+
+@app.command("dres-eval")
+def dres_eval(
+    target: Annotated[
+        str | None,
+        typer.Argument(help="Index trong danh sách hoặc evaluation id. Bỏ trống để xem."),
+    ] = None,
+) -> None:
+    from .dres import DresClient, DresError, save_evaluation_id
+
+    cfg = load_config()
+    client = DresClient.from_config(cfg)
+    try:
+        selection = client.resolve_evaluation()
+    except DresError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if target:
+        resolved = target
+        if target.isdigit():
+            index = int(target)
+            if not 1 <= index <= len(selection.active):
+                typer.echo(f"Index {index} ngoài phạm vi 1..{len(selection.active)}", err=True)
+                raise typer.Exit(code=1)
+            resolved = selection.active[index - 1].id
+        known = {item.id for item in selection.active}
+        if selection.selected is not None:
+            known.add(selection.selected.id)
+        if resolved not in known:
+            typer.echo(f"Không thấy evaluation {resolved}", err=True)
+            raise typer.Exit(code=1)
+        save_evaluation_id(cfg, resolved)
+        name = next(
+            (item.name for item in selection.active if item.id == resolved), resolved
+        )
+        typer.echo(f"đã chọn: {name} {resolved}")
+        return
+
+    if not selection.active:
+        typer.echo("Không có evaluation nào đang ACTIVE")
+        return
+    typer.echo("Các đề đang ACTIVE:")
+    for index, item in enumerate(selection.active, start=1):
+        mark = "*" if item.id == client.evaluation_id else " "
+        typer.echo(f" {mark}{index}. {item.name}  {item.id}")
 
 
 @app.command("dres-submit")
@@ -364,6 +431,9 @@ def dres_submit(
     ] = None,
     payload_file: Annotated[
         Path | None, typer.Option("--payload", help="File JSON ApiClientSubmission cho raw.")
+    ] = None,
+    evaluation: Annotated[
+        str | None, typer.Option("--evaluation", help="Evaluation id (mặc định: đề đã chọn).")
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Chỉ in payload, không nộp.")] = False,
 ) -> None:
@@ -407,11 +477,12 @@ def dres_submit(
     cfg = load_config()
     client = DresClient.from_config(cfg)
     try:
-        outcome = client.submit(answers)
+        outcome = client.submit(answers, evaluation_id=evaluation)
     except DresError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
+    typer.echo(f"evaluation: {client.evaluation_id or evaluation or '(active)'}")
     typer.echo(f"submission: {outcome.verdict} (HTTP {outcome.http_status})")
     if outcome.description:
         typer.echo(f"description: {outcome.description}")

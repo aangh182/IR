@@ -18,20 +18,22 @@ def client(tmp_path, monkeypatch) -> TestClient:
     return TestClient(create_app(cfg))
 
 
-def _stub_status(monkeypatch, *, task_group: str = "tkis") -> None:
+def _stub_status(monkeypatch, *, task_group: str = "tkis", evaluations=None) -> None:
+    evaluations = evaluations or [
+        {
+            "id": "eval-1",
+            "name": "Đề thi thử",
+            "type": "SYNCHRONOUS",
+            "status": "ACTIVE",
+            "taskTemplates": [],
+        }
+    ]
+
     def fake_request(self, method, path, *, body=None, with_status=False):
         if path == "/api/v2/user":
             return {"id": "u1", "username": "team06_t5", "role": "PARTICIPANT"}
         if path == "/api/v2/client/evaluation/list":
-            return [
-                {
-                    "id": "eval-1",
-                    "name": "Đề thi thử",
-                    "type": "SYNCHRONOUS",
-                    "status": "ACTIVE",
-                    "taskTemplates": [],
-                }
-            ]
+            return evaluations
         if path.startswith("/api/v2/client/evaluation/currentTask/"):
             return {
                 "name": f"{task_group}-1",
@@ -65,6 +67,102 @@ def test_dres_status_reports_task(client, monkeypatch) -> None:
     assert body["evaluation"]["id"] == "eval-1"
     assert body["task"]["name"] == "tkis-1"
     assert body["task"]["is_visual"] is False
+
+
+def test_dres_status_lists_both_active_evaluations(client, monkeypatch) -> None:
+    _stub_status(
+        monkeypatch,
+        evaluations=[
+            {
+                "id": "eval-mock",
+                "name": "Đề thi thử",
+                "type": "SYNCHRONOUS",
+                "status": "ACTIVE",
+                "taskTemplates": [],
+            },
+            {
+                "id": "eval-real",
+                "name": "Đề thi",
+                "type": "SYNCHRONOUS",
+                "status": "ACTIVE",
+                "taskTemplates": [],
+            },
+        ],
+    )
+
+    body = client.get("/api/dres/status").json()
+
+    assert body["needs_choice"] is True
+    assert body["evaluation"] is None
+    assert body["task"] is None
+    assert [item["name"] for item in body["evaluations"]] == ["Đề thi thử", "Đề thi"]
+
+
+def test_submit_blocked_until_evaluation_chosen(tmp_path, monkeypatch) -> None:
+    cfg = AppConfig(
+        artifacts_dir=tmp_path / "artifacts",
+        dres=DresConfig(session_id="test-session"),
+    )
+    monkeypatch.delenv("DRES_SESSION_ID", raising=False)
+    monkeypatch.delenv("DRES_EVALUATION_ID", raising=False)
+
+    with TestClient(create_app(cfg)) as client:
+        _stub_status(
+            monkeypatch,
+            evaluations=[
+                {"id": "eval-mock", "name": "Đề thi thử", "status": "ACTIVE", "taskTemplates": []},
+                {"id": "eval-real", "name": "Đề thi", "status": "ACTIVE", "taskTemplates": []},
+            ],
+        )
+
+        response = client.post(
+            "/api/dres/submit", json={"kind": "kis", "video_id": "v", "ts_ms": 10}
+        )
+        assert response.status_code == 502
+        assert "ACTIVE" in response.json()["detail"]
+
+        chosen = client.post("/api/dres/evaluation", json={"evaluation_id": "eval-real"})
+        assert chosen.status_code == 200
+
+        captured: dict[str, object] = {}
+
+        def fake_submit(self, answers, *, evaluation_id=None, task_id=None):
+            captured["evaluation_id"] = evaluation_id
+            return SubmitOutcome(True, "CORRECT", "ok", 200)
+
+        monkeypatch.setattr(DresClient, "submit", fake_submit)
+
+        response = client.post(
+            "/api/dres/submit", json={"kind": "kis", "video_id": "v", "ts_ms": 10}
+        )
+        assert response.status_code == 200
+        assert captured["evaluation_id"] is None
+        assert (cfg.state_root / "dres_evaluation").read_text(encoding="utf-8") == "eval-real"
+
+
+def test_choose_unknown_evaluation_returns_404(client, monkeypatch) -> None:
+    _stub_status(monkeypatch)
+
+    response = client.post("/api/dres/evaluation", json={"evaluation_id": "nope"})
+    assert response.status_code == 404
+
+
+def test_submit_uses_request_evaluation_override(client, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_submit(self, answers, *, evaluation_id=None, task_id=None):
+        captured["evaluation_id"] = evaluation_id
+        return SubmitOutcome(True, "CORRECT", "ok", 200)
+
+    monkeypatch.setattr(DresClient, "submit", fake_submit)
+
+    body = client.post(
+        "/api/dres/submit",
+        json={"kind": "kis", "video_id": "v", "ts_ms": 10, "evaluation_id": "eval-x"},
+    ).json()
+
+    assert body["category"] == "correct"
+    assert captured["evaluation_id"] == "eval-x"
 
 
 def test_dres_status_surfaces_dres_error(client, monkeypatch) -> None:

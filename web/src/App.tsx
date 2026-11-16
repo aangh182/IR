@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { DresPanel } from './components/DresPanel'
+import { ObjectFilterDrawer } from './components/ObjectFilterDrawer'
 import { ResultCard } from './components/ResultCard'
 import { VideoPanel } from './components/VideoPanel'
 import { formatMs } from './format'
@@ -11,6 +12,7 @@ import type {
   Hit,
   ModelInfo,
   ObjectFacet,
+  ObjectFilter,
   SearchResponse,
   Stats,
 } from './types'
@@ -36,21 +38,16 @@ type ResultsSnapshot = {
   filters: {
     includeBoilerplate: boolean
     dedup: boolean
-    objectFilter: string
+    objectFilters: ObjectFilter[]
     topK: number
     selectedModel: string
   }
 }
 
-function parseObjects(value: string): string[] {
-  return [
-    ...new Set(
-      value
-        .split(',')
-        .map((part) => part.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ]
+function serializeObjects(filters: ObjectFilter[]): string[] {
+  return filters.map((item) =>
+    item.minCount > 1 ? `${item.label}:${item.minCount}` : item.label,
+  )
 }
 
 function App() {
@@ -63,7 +60,8 @@ function App() {
   const [topK, setTopK] = useState(20)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
-  const [objectFilter, setObjectFilter] = useState('')
+  const [objectFilters, setObjectFilters] = useState<ObjectFilter[]>([])
+  const [objectDrawerOpen, setObjectDrawerOpen] = useState(false)
   const [objectOptions, setObjectOptions] = useState<ObjectFacet[]>([])
   const [includeBoilerplate, setIncludeBoilerplate] = useState(false)
   const [dedup, setDedup] = useState(true)
@@ -169,7 +167,7 @@ function App() {
         body: JSON.stringify({
           text: trimmed,
           top_k: topK,
-          objects: parseObjects(objectFilter),
+          objects: serializeObjects(objectFilters),
           model: selectedModel || undefined,
           include_boilerplate: showBoilerplate,
           dedup: useDedup,
@@ -216,7 +214,7 @@ function App() {
         filters: {
           includeBoilerplate,
           dedup,
-          objectFilter,
+          objectFilters,
           topK,
           selectedModel,
         },
@@ -237,7 +235,7 @@ function App() {
         body: JSON.stringify({
           kf_uid: hit.kf_uid,
           top_k: topK,
-          objects: parseObjects(objectFilter),
+          objects: serializeObjects(objectFilters),
           model: selectedModel || undefined,
           include_boilerplate: showBoilerplate,
           dedup: useDedup,
@@ -278,7 +276,7 @@ function App() {
         filters: {
           includeBoilerplate,
           dedup,
-          objectFilter,
+          objectFilters,
           topK,
           selectedModel,
         },
@@ -338,6 +336,8 @@ function App() {
     setActiveFrame(null)
   }, [])
 
+  const closeObjectDrawer = useCallback(() => setObjectDrawerOpen(false), [])
+
   function handleSimilar(hit: Hit) {
     void runSimilar(hit)
   }
@@ -346,7 +346,7 @@ function App() {
     void runTimeline(hit)
   }
 
-  function backToResults() {
+  const backToResults = useCallback(() => {
     if (loading) return
     const snapshot = previousResults
     setSimilarSource(null)
@@ -362,32 +362,53 @@ function App() {
     setTranslatedQuery(snapshot.translatedQuery)
     setIncludeBoilerplate(snapshot.filters.includeBoilerplate)
     setDedup(snapshot.filters.dedup)
-    setObjectFilter(snapshot.filters.objectFilter)
+    setObjectFilters(snapshot.filters.objectFilters)
     setTopK(snapshot.filters.topK)
     setSelectedModel(snapshot.filters.selectedModel)
     setActiveFrame(null)
+  }, [loading, previousResults])
+
+  function removeObject(label: string) {
+    setObjectFilters((current) => current.filter((item) => item.label !== label))
   }
 
-  function toggleObject(label: string) {
-    const current = parseObjects(objectFilter)
-    const next = current.includes(label)
-      ? current.filter((item) => item !== label)
-      : [...current, label]
-    setObjectFilter(next.join(', '))
+  function applyObjectFilters() {
+    setObjectDrawerOpen(false)
+    if (loading) return
+    if (similarSource) {
+      void runSimilar(similarSource)
+    } else if (timelineSource) {
+      void runTimeline(timelineSource)
+    } else if (query.trim()) {
+      void runSearch(query)
+    }
   }
 
   function resetFilters() {
-    setObjectFilter('')
+    setObjectFilters([])
     setIncludeBoilerplate(false)
     setDedup(true)
     setTopK(20)
     setError(null)
   }
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (objectDrawerOpen) return
+      if (!similarSource && !timelineSource) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      event.preventDefault()
+      backToResults()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [objectDrawerOpen, similarSource, timelineSource, backToResults])
+
   const online = health?.status === 'ok'
   const indexReady = health?.index_ready === true
   const selectedModelInfo = models.find((item) => item.name === selectedModel) ?? null
-  const activeObjects = parseObjects(objectFilter)
 
   function keyframeTime(hit: Hit): number {
     return hit.frames.find((frame) => frame.is_keyframe)?.ts_ms ?? hit.start_ms
@@ -543,7 +564,7 @@ function App() {
             <div className="border-t border-slate-200 pt-4">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Bộ lọc</p>
-                {(objectFilter || includeBoilerplate || !dedup || topK !== 20) && (
+                {(objectFilters.length > 0 || includeBoilerplate || !dedup || topK !== 20) && (
                   <button
                     type="button"
                     onClick={resetFilters}
@@ -575,52 +596,64 @@ function App() {
                   </select>
                 </label>
 
-                <label htmlFor="object-filter" className="block">
+                <div>
                   <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
                     Object (COCO)
                   </span>
-                  <input
-                    id="object-filter"
-                    value={objectFilter}
-                    onChange={(event) => setObjectFilter(event.target.value)}
-                    placeholder="person, car, dog..."
-                    autoComplete="off"
-                    spellCheck={false}
-                    list="object-labels"
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15 sm:text-sm"
-                  />
-                  <datalist id="object-labels">
-                    {objectOptions.map((option) => (
-                      <option key={option.label} value={option.label} />
-                    ))}
-                  </datalist>
-                </label>
-
-                {objectOptions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {objectOptions.slice(0, 12).map((option) => {
-                      const active = activeObjects.includes(option.label)
-                      return (
-                        <button
-                          key={option.label}
-                          type="button"
-                          onClick={() => toggleObject(option.label)}
-                          aria-pressed={active}
-                          className={`rounded-full border px-2 py-1 text-[10px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 ${
-                            active
-                              ? 'border-amber-500 bg-amber-50 text-amber-800'
-                              : 'border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900'
-                          }`}
+                  <button
+                    type="button"
+                    onClick={() => setObjectDrawerOpen(true)}
+                    aria-haspopup="dialog"
+                    className="mt-1.5 flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left transition hover:border-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/15"
+                  >
+                    <span className="min-w-0 truncate text-sm text-slate-700">
+                      {objectFilters.length === 0
+                        ? 'Chọn tag và số lượng'
+                        : `${objectFilters.length} tag đang lọc`}
+                    </span>
+                    {objectFilters.length > 0 && (
+                      <span
+                        aria-hidden="true"
+                        className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 px-1.5 font-mono text-[10px] font-semibold tabular-nums text-amber-800"
+                      >
+                        {objectFilters.length}
+                      </span>
+                    )}
+                  </button>
+                  {objectFilters.length > 0 && (
+                    <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                      {objectFilters.map((item) => (
+                        <li
+                          key={item.label}
+                          className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50/70 py-0.5 pl-2 pr-1 text-[10px] text-amber-900"
                         >
-                          {option.label}{' '}
-                          <span className="font-mono text-[9px] opacity-60">
-                            {option.keyframes.toLocaleString('vi-VN')}
+                          <span className="max-w-32 truncate font-medium">{item.label}</span>
+                          <span className="font-mono tabular-nums text-amber-700/80">
+                            ≥{item.minCount}
                           </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
+                          <button
+                            type="button"
+                            onClick={() => removeObject(item.label)}
+                            aria-label={`Bỏ ${item.label}`}
+                            className="flex h-4 w-4 items-center justify-center rounded-full text-amber-700/70 transition hover:bg-white hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
+                          >
+                            <svg
+                              viewBox="0 0 12 12"
+                              aria-hidden="true"
+                              className="h-2.5 w-2.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                            >
+                              <path d="M3 3l6 6M9 3l-6 6" />
+                            </svg>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
 
                 <div className="grid gap-2">
                   <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -949,6 +982,15 @@ function App() {
           </div>
         </aside>
       </div>
+
+      <ObjectFilterDrawer
+        open={objectDrawerOpen}
+        facets={objectOptions}
+        filters={objectFilters}
+        onClose={closeObjectDrawer}
+        onApply={applyObjectFilters}
+        onChange={setObjectFilters}
+      />
     </div>
   )
 }

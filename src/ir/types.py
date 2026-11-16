@@ -55,6 +55,7 @@ class Evidence(BaseModel):
     ocr: str = ""
     asr: str = ""
     objects: list[str] = Field(default_factory=list)
+    object_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class Hit(BaseModel):
