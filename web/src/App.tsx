@@ -3,6 +3,8 @@ import type { FormEvent } from 'react'
 
 import { FilterPopover } from './components/FilterPopover'
 import { ExamQueryDock } from './components/ExamQueryDock'
+import { ChainCard } from './components/ChainCard'
+import { ChainStrip } from './components/ChainStrip'
 import { Icon } from './components/Icon'
 import { MediaStage } from './components/MediaStage'
 import type { MediaStageHandle } from './components/MediaStage'
@@ -14,6 +16,7 @@ import type { SubmitHandle } from './components/SubmitBar'
 import { VideoKeyframeStrip } from './components/VideoKeyframeStrip'
 import { formatMs } from './format'
 import type {
+  ChainHit,
   FrameOption,
   Health,
   Hit,
@@ -21,9 +24,10 @@ import type {
   ObjectFacet,
   ObjectFilter,
   SearchResponse,
+  SequentialResponse,
   Stats,
 } from './types'
-import { normalizeVideoShorthand } from './video'
+import { normalizeVideoShorthand, splitSequence } from './video'
 
 const EXAMPLES = [
   'người phát biểu tại hội nghị',
@@ -53,6 +57,14 @@ type ResultsSnapshot = {
     topK: number
     selectedModel: string
   }
+}
+
+type SingleSnapshot = {
+  selected: Hit | null
+  elapsed: number | null
+  lastQuery: string
+  translatedQuery: string
+  hasSearched: boolean
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -104,6 +116,10 @@ function isSameHit(left: Hit, right: Hit): boolean {
   return left.video_id === right.video_id && left.shot_idx === right.shot_idx
 }
 
+function chainKey(chain: ChainHit): string {
+  return `${chain.video_id}-${chain.start_ms}-${chain.score.toFixed(4)}`
+}
+
 function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
@@ -141,6 +157,11 @@ function App() {
   const [videoSearchId, setVideoSearchId] = useState<string | null>(null)
   const [videoQuery, setVideoQuery] = useState('')
   const [previousResults, setPreviousResults] = useState<ResultsSnapshot | null>(null)
+  const [sequentialMode, setSequentialMode] = useState(false)
+  const [chains, setChains] = useState<ChainHit[]>([])
+  const [selectedChain, setSelectedChain] = useState<ChainHit | null>(null)
+  const [sequentialQueries, setSequentialQueries] = useState<string[]>([])
+  const [singleSnapshot, setSingleSnapshot] = useState<SingleSnapshot | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -191,6 +212,12 @@ function App() {
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [selected])
 
+  useEffect(() => {
+    if (!selectedChain) return
+    const target = document.querySelector(`[data-chain-key="${chainKey(selectedChain)}"]`)
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [selectedChain])
+
   const online = health?.status === 'ok'
   const indexReady = health?.index_ready === true
   const selectedModelInfo = models.find((item) => item.name === selectedModel) ?? null
@@ -225,17 +252,19 @@ function App() {
 
   const resultsLabel = loading
     ? 'Đang tìm...'
-    : hasSearched
-      ? `${results.length} ${
-          similarSource
-            ? 'frame tương tự'
-            : timelineSource
-              ? 'keyframe lân cận'
-              : videoSearchId
-                ? `keyframe · ${videoSearchId}`
-                : 'keyframe'
-        }`
-      : 'Kết quả'
+    : sequentialMode
+      ? `${chains.length} chuỗi`
+      : hasSearched
+        ? `${results.length} ${
+            similarSource
+              ? 'frame tương tự'
+              : timelineSource
+                ? 'keyframe lân cận'
+                : videoSearchId
+                  ? `keyframe · ${videoSearchId}`
+                  : 'keyframe'
+          }`
+        : 'Kết quả'
 
   function focusStage() {
     window.requestAnimationFrame(() => {
@@ -244,9 +273,128 @@ function App() {
     })
   }
 
+  function exitSequentialMode() {
+    if (loading) return
+    const snapshot = singleSnapshot
+    setSequentialMode(false)
+    setChains([])
+    setSelectedChain(null)
+    setSequentialQueries([])
+    setError(null)
+    setSingleSnapshot(null)
+    if (!snapshot) return
+    setSelected(snapshot.selected)
+    setElapsed(snapshot.elapsed)
+    setLastQuery(snapshot.lastQuery)
+    setTranslatedQuery(snapshot.translatedQuery)
+    setHasSearched(snapshot.hasSearched)
+    setActiveFrameIndex(null)
+  }
+
+  function toggleSequential() {
+    if (loading) return
+    if (sequentialMode) {
+      exitSequentialMode()
+      return
+    }
+    setSingleSnapshot({
+      selected,
+      elapsed,
+      lastQuery,
+      translatedQuery,
+      hasSearched,
+    })
+    setSequentialMode(true)
+    setChains([])
+    setSelectedChain(null)
+    setSequentialQueries([])
+    setError(null)
+  }
+
+  function selectChain(chain: ChainHit) {
+    setSelectedChain(chain)
+    setSelected(chain.events[0]?.hit ?? null)
+    setActiveFrameIndex(null)
+  }
+
+  function moveChainSelection(delta: number) {
+    if (!sequentialMode || chains.length === 0) return
+    const current = selectedChain ? chains.indexOf(selectedChain) : -1
+    const base = current === -1 ? 0 : current
+    const next = Math.max(0, Math.min(chains.length - 1, base + delta))
+    if (next === current) return
+    selectChain(chains[next])
+  }
+
+  async function runSequential(queries: string[]) {
+    if (loading) return
+    const cleaned = queries
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 6)
+    if (cleaned.length < 2) {
+      setError('Cần ít nhất 2 sự kiện, phân tách bằng →.')
+      return
+    }
+    if (!sequentialMode) {
+      setSingleSnapshot({
+        selected,
+        elapsed,
+        lastQuery,
+        translatedQuery,
+        hasSearched,
+      })
+      setSequentialMode(true)
+    }
+
+    setLoading(true)
+    setError(null)
+    setSequentialQueries(cleaned)
+    setChains([])
+    setSelectedChain(null)
+
+    try {
+      const response = await fetch('/api/sequential', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queries: cleaned,
+          top_k: topK,
+          model: selectedModel || undefined,
+          fuse_models: true,
+          include_boilerplate: includeBoilerplate,
+          objects: cleaned.map(() => serializeObjects(objectFilters)),
+        }),
+      })
+      if (!response.ok) throw new Error(await responseError(response))
+
+      const data = (await response.json()) as SequentialResponse
+      setChains(data.chains)
+      const first = data.chains[0] ?? null
+      setSelectedChain(first)
+      setSelected(first?.events[0]?.hit ?? null)
+      setActiveFrameIndex(null)
+      setElapsed(data.elapsed_ms)
+      setLastQuery(cleaned.join(' → '))
+      setTranslatedQuery('')
+      setHasSearched(true)
+      focusStage()
+    } catch (err) {
+      setChains([])
+      setSelectedChain(null)
+      setSelected(null)
+      setActiveFrameIndex(null)
+      setElapsed(null)
+      setError(err instanceof Error ? err.message : 'Lỗi không xác định')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function runSearch(text: string, options: RunOptions = {}) {
     const trimmed = text.trim()
     if (!trimmed || loading) return
+    if (sequentialMode) exitSequentialMode()
 
     const showBoilerplate = options.includeBoilerplate ?? includeBoilerplate
     const useDedup = options.dedup ?? dedup
@@ -300,6 +448,7 @@ function App() {
 
   async function runSimilar(hit: Hit, options: RunOptions = {}) {
     if (loading) return
+    if (sequentialMode) exitSequentialMode()
     if (!hit.kf_uid) {
       setError('Frame này không có kf_uid trong index.')
       return
@@ -373,6 +522,7 @@ function App() {
 
   async function runTimeline(hit: Hit) {
     if (loading) return
+    if (sequentialMode) exitSequentialMode()
     if (!hit.kf_uid) {
       setError('Frame này không có kf_uid trong index.')
       return
@@ -437,6 +587,7 @@ function App() {
 
   async function runVideoSearch(videoId: string) {
     if (loading) return
+    if (sequentialMode) exitSequentialMode()
 
     setLoading(true)
     setError(null)
@@ -487,6 +638,15 @@ function App() {
     setQuery(text)
     setError(null)
     if (filtersOpen) setFiltersOpen(false)
+    if (sequentialMode) {
+      const queries = splitSequence(text)
+      if (queries.length < 2) {
+        setError('Cần ít nhất 2 sự kiện, phân tách bằng →.')
+        return
+      }
+      void runSequential(queries)
+      return
+    }
     void runSearch(text)
   }
 
@@ -504,17 +664,34 @@ function App() {
       void runVideoSearch(videoSearchId)
       return
     }
+    if (sequentialMode) {
+      if (sequentialQueries.length >= 2) void runSequential(sequentialQueries)
+      return
+    }
     if (query.trim()) void runSearch(query, options)
   }
 
   function submitSearch() {
     const trimmed = query.trim()
     if (!trimmed) {
-      setError('Nhập mô tả sự kiện trước khi tìm.')
+      setError(
+        sequentialMode
+          ? 'Nhập chuỗi sự kiện, phân tách bằng →.'
+          : 'Nhập mô tả sự kiện trước khi tìm.',
+      )
       queryRef.current?.focus()
       return
     }
     if (filtersOpen) setFiltersOpen(false)
+    if (sequentialMode) {
+      const queries = splitSequence(trimmed)
+      if (queries.length < 2) {
+        setError('Cần ít nhất 2 sự kiện, phân tách bằng →.')
+        return
+      }
+      void runSequential(queries)
+      return
+    }
     void runSearch(trimmed)
   }
 
@@ -665,6 +842,11 @@ function App() {
         return
       }
       if (objectDrawerOpen) return
+      if (sequentialMode) {
+        event.preventDefault()
+        exitSequentialMode()
+        return
+      }
       if (similarSource || timelineSource) {
         event.preventDefault()
         backToResults()
@@ -683,19 +865,23 @@ function App() {
         break
       case 'ArrowRight':
         event.preventDefault()
-        moveSelection(1)
+        if (sequentialMode) moveChainSelection(1)
+        else moveSelection(1)
         break
       case 'ArrowLeft':
         event.preventDefault()
-        moveSelection(-1)
+        if (sequentialMode) moveChainSelection(-1)
+        else moveSelection(-1)
         break
       case 'ArrowDown':
         event.preventDefault()
-        moveSelection(2)
+        if (sequentialMode) moveChainSelection(2)
+        else moveSelection(2)
         break
       case 'ArrowUp':
         event.preventDefault()
-        moveSelection(-2)
+        if (sequentialMode) moveChainSelection(-2)
+        else moveSelection(-2)
         break
       case ' ':
         event.preventDefault()
@@ -776,7 +962,7 @@ function App() {
               </span>
             </div>
             <span className="hidden text-sm font-semibold tracking-tight text-slate-900 sm:inline">
-              AIC2024 <span className="font-normal text-slate-500">KIS</span>
+              Mage<span className="font-normal text-slate-500">seeker</span>
             </span>
           </div>
 
@@ -793,14 +979,48 @@ function App() {
                   setQuery(event.target.value)
                   if (error) setError(null)
                 }}
+                onKeyDown={(event) => {
+                  if (
+                    !sequentialMode ||
+                    event.key !== 'Enter' ||
+                    !event.shiftKey ||
+                    event.nativeEvent.isComposing
+                  ) {
+                    return
+                  }
+                  event.preventDefault()
+                  const input = event.currentTarget
+                  const start = input.selectionStart ?? query.length
+                  const end = input.selectionEnd ?? start
+                  const before = query.slice(0, start)
+                  const after = query.slice(end)
+                  const insert = before.trim() ? ' → ' : ''
+                  const next = `${before}${insert}${after}`
+                  setQuery(next)
+                  if (error) setError(null)
+                  window.requestAnimationFrame(() => {
+                    const position = before.length + insert.length
+                    input.setSelectionRange(position, position)
+                    input.focus()
+                  })
+                }}
                 type="search"
                 enterKeyHint="search"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
                 spellCheck={false}
-                placeholder="Mô tả sự kiện..."
-                aria-label="Mô tả sự kiện"
+                placeholder={
+                  sequentialMode
+                    ? 'Sự kiện 1 · Shift+Enter để thêm'
+                    : 'Mô tả sự kiện...'
+                }
+                title={
+                  sequentialMode
+                    ? 'Shift+Enter để tách sự kiện, Enter để tìm'
+                    : undefined
+                }
+                aria-label={sequentialMode ? 'Chuỗi sự kiện' : 'Mô tả sự kiện'}
                 className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-9 pr-10 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-500 hover:border-slate-300 focus:border-blue-600 focus:bg-white focus:ring-2 focus:ring-blue-600/15"
               />
               <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-white px-1 py-0.5 font-mono text-[10px] text-slate-500 sm:block">
@@ -820,6 +1040,21 @@ function App() {
               )}
               <span className="hidden sm:inline">{loading ? 'Đang tìm' : 'Tìm'}</span>
               <span className="sm:hidden">{loading ? '' : 'Tìm'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={toggleSequential}
+              disabled={loading}
+              aria-pressed={sequentialMode}
+              title="Tìm chuỗi sự kiện (A → B → C)"
+              className={`flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 disabled:cursor-not-allowed disabled:opacity-50 ${
+                sequentialMode
+                  ? 'border-blue-600 bg-blue-50 text-blue-800'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+              }`}
+            >
+              <Icon name="timeline" className="h-3.5 w-3.5" />
+              <span>Chuỗi</span>
             </button>
           </form>
 
@@ -945,10 +1180,18 @@ function App() {
                   hit={selected}
                   frames={selectedFrames}
                   activeIndex={activeIndex}
+                  compact={sequentialMode && Boolean(selectedChain)}
                   onSelectFrame={setActiveFrameIndex}
                   onSimilar={() => handleSimilar(selected)}
                   onTimeline={() => handleTimeline(selected)}
                 />
+                {sequentialMode && selectedChain && (
+                  <ChainStrip
+                    chain={selectedChain}
+                    activeKfUid={selected?.kf_uid ?? null}
+                    onSelect={handleSelect}
+                  />
+                )}
                 <VideoKeyframeStrip
                   key={selected.video_id}
                   videoId={selected.video_id}
@@ -995,6 +1238,27 @@ function App() {
             aria-label="Kết quả tìm kiếm"
             className="scroll-slim min-h-0 laptop:overflow-y-auto laptop:border-l laptop:border-slate-200 laptop:pl-3"
           >
+            {sequentialMode && (
+              <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold text-blue-900">
+                    Chuỗi sự kiện · {sequentialQueries.length} sự kiện
+                  </p>
+                  <p className="truncate text-[10px] text-blue-800">
+                    {sequentialQueries.join(' → ') || 'Nhập chuỗi ở ô tìm kiếm'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={exitSequentialMode}
+                  disabled={loading}
+                  className="shrink-0 rounded-md bg-white px-2 py-1 text-[11px] font-medium text-blue-800 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Tắt chuỗi
+                </button>
+              </div>
+            )}
+
             <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white p-1.5">
               <label
                 htmlFor="video-lookup"
@@ -1075,7 +1339,42 @@ function App() {
               </div>
             )}
 
-            {results.length > 0 ? (
+            {sequentialMode ? (
+              loading ? (
+                <div className="results-grid" aria-busy="true">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="aspect-video animate-pulse rounded-xl bg-slate-200/70"
+                    />
+                  ))}
+                </div>
+              ) : chains.length > 0 ? (
+                <div className="results-grid">
+                  {chains.map((chain) => (
+                    <ChainCard
+                      key={chainKey(chain)}
+                      chain={chain}
+                      selected={selectedChain === chain}
+                      onSelect={selectChain}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="px-1 py-8 text-center">
+                  <p className="text-xs text-slate-500">
+                    {hasSearched
+                      ? 'Không có chuỗi.'
+                      : 'Bật chuỗi, nhập các sự kiện bằng → rồi Tìm.'}
+                  </p>
+                  {sequentialQueries.length >= 2 && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      {sequentialQueries.join(' → ')}
+                    </p>
+                  )}
+                </div>
+              )
+            ) : results.length > 0 ? (
               <div className="results-grid">
                 {results.map((hit) => (
                   <ResultCard
@@ -1112,7 +1411,7 @@ function App() {
               </div>
             )}
 
-            {results.length > 0 && (
+            {(results.length > 0 || chains.length > 0) && (
               <div
                 aria-hidden="true"
                 className="pointer-events-none sticky bottom-0 -mt-8 h-8 bg-gradient-to-t from-[#f7f7f5] to-transparent"
@@ -1128,7 +1427,11 @@ function App() {
         frame={activeFrame}
         onEvaluationChange={handleDresRevision}
         queryControl={
-          <ExamQueryDock onUseQuery={useExamQuery} refreshKey={dresRevision} />
+          <ExamQueryDock
+            onUseQuery={useExamQuery}
+            refreshKey={dresRevision}
+            sequential={sequentialMode}
+          />
         }
       />
 

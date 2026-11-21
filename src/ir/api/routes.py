@@ -23,8 +23,9 @@ from ..dres import (
     trake_answer,
 )
 from ..search.service import IndexUnavailableError, SearchService
+from ..search.translate import TranslationError
 from ..store.db import connect, get_stats, object_facets
-from ..types import SearchResponse
+from ..types import SearchResponse, SequentialResponse
 
 router = APIRouter(prefix="/api", tags=["search"])
 
@@ -53,6 +54,21 @@ class TimelineRequest(BaseModel):
     kf_uid: int = Field(ge=1)
     before: int | None = Field(default=None, ge=0, le=100)
     after: int | None = Field(default=None, ge=0, le=100)
+
+
+class SequentialRequest(BaseModel):
+    queries: list[str] = Field(min_length=2, max_length=6)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    model: str | None = None
+    fuse_models: bool | None = None
+    candidate_k: int | None = Field(default=None, ge=50, le=5000)
+    per_video_event: int | None = Field(default=None, ge=2, le=100)
+    min_gap_ms: int | None = Field(default=None, ge=0, le=60000)
+    max_gap_ms: int | None = Field(default=None, ge=0, le=600000)
+    max_span_ms: int | None = Field(default=None, ge=0, le=600000)
+    gap_penalty: float | None = Field(default=None, ge=0, le=10)
+    include_boilerplate: bool = False
+    objects: list[list[str]] | None = None
 
 
 class DresSubmitRequest(BaseModel):
@@ -128,6 +144,8 @@ def search(payload: SearchRequest, request: Request) -> SearchResponse:
         )
     except IndexUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except TranslationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -157,6 +175,31 @@ def timeline(payload: TimelineRequest, request: Request) -> SearchResponse:
             before=payload.before,
             after=payload.after,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/sequential", response_model=SequentialResponse)
+def sequential(payload: SequentialRequest, request: Request) -> SequentialResponse:
+    try:
+        return _service(request).sequential(
+            payload.queries,
+            top_k=payload.top_k,
+            model=payload.model,
+            fuse_models=payload.fuse_models,
+            candidate_k=payload.candidate_k,
+            per_video_event=payload.per_video_event,
+            min_gap_ms=payload.min_gap_ms,
+            max_gap_ms=payload.max_gap_ms,
+            max_span_ms=payload.max_span_ms,
+            gap_penalty=payload.gap_penalty,
+            include_boilerplate=payload.include_boilerplate,
+            objects=payload.objects,
+        )
+    except IndexUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except TranslationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

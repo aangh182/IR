@@ -1,4 +1,4 @@
-# AIC2024 Known-Item Search
+# Mageseeker
 
 Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (Video KIS) và Q&A cho vòng chung kết AIC2024.
 
@@ -423,8 +423,9 @@ cổng `5173` và `8000` ở tab **PORTS**.
 - Keyframe/follow frame đã có `Cache-Control: max-age=3600`; stage chỉ tải video khi
   bấm Space/phát, không prefetch video mỗi lần chọn frame.
 - Gemini dịch query là call mạng ngoài duy nhất (ngoài DRES), có cache 256 query.
-  Mạng yếu nên giảm `translate.timeout_sec` (ví dụ `4.0`) hoặc tắt `translate.enabled`
-  và nhập query tiếng Anh.
+  Translator **luôn dịch**: mạng yếu thì giảm `translate.timeout_sec` (ví dụ `4.0`);
+  nếu thiếu key hoặc Gemini lỗi, API trả **502** chứ không fallback sang query gốc.
+  Sequential dịch cả danh sách event trong một call; batch lỗi thì dịch từng câu.
 - Video lookup tải toàn bộ keyframe của video; ảnh trong grid/strip đều lazy-load,
   dùng strip để điều hướng các video dài.
 
@@ -568,7 +569,8 @@ printf 'your-gemini-api-key' > state/gemini_api_key
 chmod 600 state/gemini_api_key
 ```
 
-Nếu thiếu key hoặc Gemini lỗi, search dùng query gốc. Response có thêm `query` và
+API luôn dịch query trước khi encode; nếu thiếu key hoặc Gemini lỗi, API trả lỗi
+**502** và không fallback sang query gốc. Response có thêm `query` và
 `translated_query`; CLI in bản dịch trước danh sách kết quả.
 
 ## Chạy keyframe

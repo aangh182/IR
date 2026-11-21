@@ -5,7 +5,7 @@ primary_target: "web/src/App.tsx"
 related_targets: []
 ---
 
-# Surface: AIC2024 KIS operator console
+# Surface: Mageseeker operator console
 
 ## Scope
 

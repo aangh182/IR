@@ -32,17 +32,48 @@ def _cfg(tmp_path, **kwargs) -> AppConfig:
     )
 
 
-def test_disabled_returns_original(tmp_path) -> None:
+def test_disabled_raises(tmp_path) -> None:
     translator = GeminiTranslator(_cfg(tmp_path, enabled=False))
-    assert translator.translate("  người đàn ông  ") == "người đàn ông"
+    with pytest.raises(TranslationError):
+        translator.translate("  người đàn ông  ")
 
 
-def test_missing_key_returns_original(tmp_path, monkeypatch) -> None:
+def test_missing_key_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     translator = GeminiTranslator(_cfg(tmp_path))
-    assert translator.translate("người đàn ông") == "người đàn ông"
+    with pytest.raises(TranslationError):
+        translator.translate("người đàn ông")
+
+
+def test_translate_many_uses_one_batch_call(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    calls: list[dict] = []
+
+    def fake_urlopen(request, timeout=None):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        return _Response(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": json.dumps(["a man", "audience", "clapping"])}
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(translate_module.urllib.request, "urlopen", fake_urlopen)
+
+    translator = GeminiTranslator(_cfg(tmp_path))
+    result = translator.translate_many(["một người đàn ông", "khán giả", "vỗ tay"])
+    assert result == ["a man", "audience", "clapping"]
+    assert len(calls) == 1
 
 
 def test_translates_vietnamese_and_caches(tmp_path, monkeypatch) -> None:

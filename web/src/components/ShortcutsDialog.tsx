@@ -5,6 +5,7 @@ import { Icon } from './Icon'
 const SHORTCUTS: { keys: string[]; label: string }[] = [
   { keys: ['/'], label: 'Tìm kiếm' },
   { keys: ['Enter'], label: 'Chạy truy vấn' },
+  { keys: ['Shift', 'Enter'], label: 'Thêm sự kiện (chuỗi)' },
   { keys: ['↑', '↓', '←', '→'], label: 'Chọn frame' },
   { keys: ['Space'], label: 'Phát / dừng video' },
   { keys: ['[', ']'], label: 'Frame trước / sau' },

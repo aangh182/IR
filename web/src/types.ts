@@ -77,6 +77,32 @@ export type SearchResponse = {
   dres_payload: unknown
 }
 
+export type ChainEvent = {
+  position: number
+  hit: Hit
+  score: number
+  ts_ms: number
+}
+
+export type ChainHit = {
+  video_id: string
+  score: number
+  start_ms: number
+  end_ms: number
+  span_ms: number
+  collapsed: boolean
+  events: ChainEvent[]
+}
+
+export type SequentialResponse = {
+  query_id: string
+  queries: string[]
+  translated_queries: string[]
+  model: string
+  elapsed_ms: number
+  chains: ChainHit[]
+}
+
 export type DresTask = {
   name: string
   task_group: string

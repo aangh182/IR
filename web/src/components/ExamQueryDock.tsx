@@ -7,6 +7,7 @@ import { Icon } from './Icon'
 type Props = {
   onUseQuery: (query: string) => void
   refreshKey: number
+  sequential: boolean
 }
 
 async function fetchQuery(): Promise<DresQuery> {
@@ -24,7 +25,7 @@ async function fetchQuery(): Promise<DresQuery> {
   return (await response.json()) as DresQuery
 }
 
-export function ExamQueryDock({ onUseQuery, refreshKey }: Props) {
+export function ExamQueryDock({ onUseQuery, refreshKey, sequential }: Props) {
   const [data, setData] = useState<DresQuery | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
@@ -72,6 +73,8 @@ export function ExamQueryDock({ onUseQuery, refreshKey }: Props) {
 
   const query = data?.query ?? ''
   const segments = data?.segments ?? []
+  const queryText =
+    sequential && segments.length > 0 ? segments.join(' → ') : query
   const message = error ?? data?.error ?? null
   const evaluationName = data?.evaluation_name ?? ''
   const taskLabel = data?.task_name
@@ -81,9 +84,9 @@ export function ExamQueryDock({ onUseQuery, refreshKey }: Props) {
   const summary = [evaluationName, taskLabel, timeLeft].filter(Boolean).join(' · ')
 
   async function copy() {
-    if (!query) return
+    if (!queryText) return
     try {
-      await navigator.clipboard.writeText(query)
+      await navigator.clipboard.writeText(queryText)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -171,23 +174,23 @@ export function ExamQueryDock({ onUseQuery, refreshKey }: Props) {
                 <button
                   type="button"
                   onClick={() => {
-                    if (!query) return
-                    onUseQuery(query)
+                    if (!queryText) return
+                    onUseQuery(queryText)
                     setOpen(false)
                   }}
-                  disabled={!query}
+                  disabled={!queryText}
                   className={`h-9 rounded-lg px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 ${
-                    query
+                    queryText
                       ? 'bg-blue-600 text-white hover:bg-blue-700'
                       : 'cursor-not-allowed bg-slate-200 text-slate-500'
                   }`}
                 >
-                  Dùng query
+                  {sequential ? 'Dùng chuỗi' : 'Dùng query'}
                 </button>
                 <button
                   type="button"
                   onClick={() => void copy()}
-                  disabled={!query}
+                  disabled={!queryText}
                   className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 disabled:cursor-not-allowed disabled:text-slate-500"
                 >
                   {copied ? 'Đã copy' : 'Copy'}

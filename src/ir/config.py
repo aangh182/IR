@@ -125,6 +125,18 @@ class SearchConfig(BaseModel):
     boost: Boost = Field(default_factory=Boost)
 
 
+class SequentialConfig(BaseModel):
+    candidate_k: int = 1200
+    per_video_event: int = 20
+    min_gap_ms: int = 500
+    max_gap_ms: int = 60000
+    max_span_ms: int = 60000
+    answer_window_ms: int = 4000
+    gap_penalty: float = 0.01
+    fuse_models: bool = True
+    top_k: int = 20
+
+
 class TranslateConfig(BaseModel):
     enabled: bool = True
     model: str = "gemini-3.1-flash-lite"
@@ -163,6 +175,7 @@ class AppConfig(BaseModel):
     objects: ObjectsConfig = Field(default_factory=ObjectsConfig)
     faiss: FaissConfig = Field(default_factory=FaissConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    sequential: SequentialConfig = Field(default_factory=SequentialConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
     dres: DresConfig = Field(default_factory=DresConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)

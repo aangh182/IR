@@ -16,3 +16,24 @@ export function normalizeVideoShorthand(input: string): string | null {
 
   return `L${String(part).padStart(2, '0')}_V${String(number).padStart(3, '0')}`
 }
+
+const ARROW_SPLIT = /\s*(?:→|->|=>|\r?\n)\s*/
+const CONNECTOR_SPLIT =
+  /\s*(?:;|mở đầu|đầu tiên|sau đó|tiếp theo|kế tiếp|cuối cùng|kết thúc|rồi)\s*/i
+
+export function splitSequence(input: string): string[] {
+  const value = input.trim()
+  if (!value) return []
+
+  const direct = value
+    .split(ARROW_SPLIT)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (direct.length >= 2) return direct.slice(0, 6)
+
+  return value
+    .split(CONNECTOR_SPLIT)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 6)
+}

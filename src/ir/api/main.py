@@ -25,7 +25,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
     cfg = config or load_config()
-    app = FastAPI(title="AIC2024 Known-Item Search", version=__version__, lifespan=_lifespan)
+    app = FastAPI(title="Mageseeker", version=__version__, lifespan=_lifespan)
     app.state.config = cfg
     app.state.search_service = SearchService(cfg)
     app.add_middleware(

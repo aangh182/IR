@@ -44,7 +44,7 @@ The interface treats the retrieved frame as the primary object, not the result m
 
 ## Brand Commitments
 
-No formal brand system exists. The AIC2024 competition context and the current Vietnamese terminology (KIS, DRES, keyframe, follow frame, boilerplate, dedup) are binding. Existing product functionality and URLs must be preserved.
+The product is **Mageseeker**. The AIC2024 competition context and the current Vietnamese terminology (KIS, DRES, keyframe, follow frame, boilerplate, dedup) are binding. Existing product functionality and URLs must be preserved.
 
 The operator explicitly chose the standard search console over a distinctive visual world: reliability and speed over novelty. Do not reintroduce world costumes, ornamental chrome, or novel controls. The craft bar is Google Photos' large visual grid combined with Linear's keyboard-first speed; arrow keys navigate frames, Space previews the video, and the primary path stays one screen.
 

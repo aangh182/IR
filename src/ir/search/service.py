@@ -17,6 +17,8 @@ from ..objects import parse_object_filters
 from ..store.db import connect, keyframe_uids_with_objects, object_counts_for
 from ..store.faiss_store import FaissStore, IndexUnavailableError
 from ..types import (
+    ChainEvent,
+    ChainHit,
     DresAnswer,
     DresAnswerSet,
     DresPayload,
@@ -24,6 +26,7 @@ from ..types import (
     FrameOption,
     Hit,
     SearchResponse,
+    SequentialResponse,
 )
 from .encoder import TextEncoder
 from .translate import GeminiTranslator
@@ -372,6 +375,310 @@ class SearchService:
             dres_payload=self._build_payload(hits[:1]),
         )
 
+    def sequential(
+        self,
+        queries: list[str],
+        top_k: int | None = None,
+        model: str | None = None,
+        fuse_models: bool | None = None,
+        candidate_k: int | None = None,
+        per_video_event: int | None = None,
+        min_gap_ms: int | None = None,
+        max_gap_ms: int | None = None,
+        max_span_ms: int | None = None,
+        gap_penalty: float | None = None,
+        include_boilerplate: bool = False,
+        objects: list[list[str]] | None = None,
+    ) -> SequentialResponse:
+        started = time.perf_counter()
+        cleaned = [query.strip() for query in queries if query.strip()]
+        if len(cleaned) < 2 or len(cleaned) > 6:
+            raise ValueError("Cần 2-6 sự kiện cho tìm kiếm chuỗi")
+
+        cfg = self.cfg.sequential
+        limit = min(max(top_k or cfg.top_k, 1), 50)
+        cand_k = min(max(candidate_k or cfg.candidate_k, 100), 5000)
+        per_video = min(max(per_video_event or cfg.per_video_event, 2), 100)
+        min_gap = max(min_gap_ms if min_gap_ms is not None else cfg.min_gap_ms, 0)
+        max_gap = max(max_gap_ms if max_gap_ms is not None else cfg.max_gap_ms, min_gap)
+        max_span = max(max_span_ms if max_span_ms is not None else cfg.max_span_ms, max_gap)
+        penalty = max(gap_penalty if gap_penalty is not None else cfg.gap_penalty, 0.0)
+        use_fuse = cfg.fuse_models if fuse_models is None else fuse_models
+        use_objects = objects or []
+
+        translated = self._translate_many(cleaned)
+
+        profiles = self.cfg.embed_profiles()
+        names = list(profiles) if use_fuse else [model or self.cfg.embed.default]
+        loaded: list[tuple[str, FaissStore, TextEncoder]] = []
+        for name in names:
+            try:
+                store, encoder, profile_name = self._ensure_loaded(name)
+            except (IndexUnavailableError, ValueError):
+                if not use_fuse or name == (model or self.cfg.embed.default):
+                    raise
+                continue
+            loaded.append((profile_name, store, encoder))
+        if not loaded:
+            raise IndexUnavailableError("Không có embedding index cho tìm kiếm chuỗi")
+
+        excluded: set[int] = set()
+        if not include_boilerplate:
+            for name, _, _ in loaded:
+                mask = self._boilerplate.get(name)
+                if mask:
+                    excluded.update(mask)
+
+        per_event: list[dict[str, list[dict[str, object]]]] = []
+        for index, text in enumerate(translated):
+            fused: dict[int, float] = {}
+            for name, store, encoder in loaded:
+                try:
+                    vector = encoder.encode(text)
+                    candidates = store.search(vector, cand_k)
+                except Exception:
+                    logger.exception("sequential search failed for model %s", name)
+                    if len(loaded) == 1:
+                        raise
+                    continue
+                for rank, (_score, kf_uid) in enumerate(candidates):
+                    if kf_uid in excluded:
+                        continue
+                    fused[kf_uid] = fused.get(kf_uid, 0.0) + 1.0 / (60.0 + rank)
+
+            if not fused:
+                per_event.append({})
+                continue
+
+            filters = []
+            if index < len(use_objects):
+                filters = self._normalize_object_filters(use_objects[index])
+            if filters:
+                with closing(connect(self.cfg.db_path)) as conn:
+                    allowed = keyframe_uids_with_objects(conn, list(fused), filters)
+                fused = {uid: score for uid, score in fused.items() if uid in allowed}
+                if not fused:
+                    per_event.append({})
+                    continue
+
+            ordered = sorted(fused.items(), key=lambda item: item[1], reverse=True)
+            norms = {
+                uid: 1.0 - (position / (len(ordered) + 1.0))
+                for position, (uid, _score) in enumerate(ordered)
+            }
+
+            with closing(connect(self.cfg.db_path)) as conn:
+                uids = list(fused)
+                rows = []
+                for start in range(0, len(uids), 500):
+                    chunk = uids[start:start + 500]
+                    placeholders = ",".join("?" for _ in chunk)
+                    rows.extend(
+                        conn.execute(
+                            f"""
+                            SELECT kf_uid, video_id, shot_idx, ts_ms
+                            FROM keyframes WHERE kf_uid IN ({placeholders})
+                            """,
+                            chunk,
+                        ).fetchall()
+                    )
+
+            by_video: dict[str, list[dict[str, object]]] = {}
+            for row in rows:
+                uid = int(row["kf_uid"])
+                if uid not in norms:
+                    continue
+                by_video.setdefault(str(row["video_id"]), []).append(
+                    {
+                        "kf_uid": uid,
+                        "video_id": str(row["video_id"]),
+                        "shot_idx": int(row["shot_idx"]),
+                        "ts_ms": int(row["ts_ms"]),
+                        "score": norms[uid],
+                    }
+                )
+
+            event_map: dict[str, list[dict[str, object]]] = {}
+            for video_id, items in by_video.items():
+                items.sort(key=lambda item: float(item["score"]), reverse=True)
+                chosen = items[:per_video]
+                chosen.sort(key=lambda item: int(item["ts_ms"]))
+                event_map[video_id] = chosen
+            per_event.append(event_map)
+
+        video_ids = set(per_event[0]) if per_event else set()
+        for event_map in per_event[1:]:
+            video_ids &= set(event_map)
+
+        chains_candidates: list[dict[str, object]] = []
+        for video_id in video_ids:
+            events = [event_map[video_id] for event_map in per_event]
+            chain = self._best_chain(events, min_gap, max_gap, penalty, max_span)
+            if chain is None:
+                chain = self._best_window(events, max_span)
+            if chain is None:
+                continue
+            chains_candidates.append(chain)
+
+        chains_candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+        top = chains_candidates[:limit]
+
+        all_uids: list[int] = []
+        for chain in top:
+            for event in chain["events"]:
+                all_uids.append(int(event["kf_uid"]))
+        hit_map: dict[int, Hit] = {}
+        if all_uids:
+            unique = list(dict.fromkeys(all_uids))
+            hits = self._build_hits(
+                [(0.0, uid) for uid in unique],
+                len(unique),
+                dedup_shots=False,
+            )
+            hit_map = {int(hit.kf_uid): hit for hit in hits if hit.kf_uid is not None}
+
+        chains: list[ChainHit] = []
+        for chain in top:
+            events = chain["events"]
+            chain_events: list[ChainEvent] = []
+            for position, event in enumerate(events):
+                uid = int(event["kf_uid"])
+                hit = hit_map.get(uid)
+                if hit is None:
+                    continue
+                hit.score = float(event["score"])
+                chain_events.append(
+                    ChainEvent(
+                        position=position,
+                        hit=hit,
+                        score=float(event["score"]),
+                        ts_ms=int(event["ts_ms"]),
+                    )
+                )
+            if not chain_events:
+                continue
+            start_ms = min(int(event["ts_ms"]) for event in events)
+            end_ms = max(int(event["ts_ms"]) for event in events)
+            chains.append(
+                ChainHit(
+                    video_id=str(chain["video_id"]),
+                    score=float(chain["score"]),
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    span_ms=max(0, end_ms - start_ms),
+                    collapsed=bool(chain["collapsed"]),
+                    events=chain_events,
+                )
+            )
+
+        return SequentialResponse(
+            query_id=uuid.uuid4().hex,
+            queries=cleaned,
+            translated_queries=translated,
+            model="+".join(name for name, _, _ in loaded),
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            chains=chains,
+        )
+
+    @staticmethod
+    def _best_chain(
+        events: list[list[dict[str, object]]],
+        min_gap: int,
+        max_gap: int,
+        penalty: float,
+        max_span: int,
+    ) -> dict[str, object] | None:
+        if not events or any(not event for event in events):
+            return None
+        count = len(events)
+        dp: list[dict[int, float]] = [{} for _ in range(count)]
+        back: list[dict[int, int]] = [{} for _ in range(count)]
+        for index, item in enumerate(events[0]):
+            dp[0][index] = float(item["score"])
+        for step in range(1, count):
+            previous = events[step - 1]
+            current = events[step]
+            for index, item in enumerate(current):
+                ts = int(item["ts_ms"])
+                best: float | None = None
+                best_previous = -1
+                for previous_index, previous_item in enumerate(previous):
+                    if previous_index not in dp[step - 1]:
+                        continue
+                    gap = ts - int(previous_item["ts_ms"])
+                    if gap < min_gap or gap > max_gap:
+                        continue
+                    value = (
+                        dp[step - 1][previous_index]
+                        + float(item["score"])
+                        - penalty * (gap / 1000.0)
+                    )
+                    if best is None or value > best:
+                        best = value
+                        best_previous = previous_index
+                if best is not None:
+                    dp[step][index] = best
+                    back[step][index] = best_previous
+        if not dp[count - 1]:
+            return None
+        end = max(dp[count - 1], key=lambda index: dp[count - 1][index])
+        chain_events = [events[count - 1][end]]
+        for step in range(count - 1, 0, -1):
+            end = back[step][end]
+            chain_events.append(events[step - 1][end])
+        chain_events.reverse()
+        span = int(chain_events[-1]["ts_ms"]) - int(chain_events[0]["ts_ms"])
+        if span > max_span:
+            return None
+        return {
+            "video_id": str(chain_events[0]["video_id"]),
+            "score": dp[count - 1][
+                max(dp[count - 1], key=lambda index: dp[count - 1][index])
+            ],
+            "collapsed": False,
+            "events": chain_events,
+        }
+
+    @staticmethod
+    def _best_window(
+        events: list[list[dict[str, object]]],
+        max_span: int,
+    ) -> dict[str, object] | None:
+        if not events or any(not event for event in events):
+            return None
+        first = events[0]
+        best: tuple[float, list[dict[str, object]]] | None = None
+        for anchor in first:
+            anchor_ts = int(anchor["ts_ms"])
+            chosen = [anchor]
+            score = float(anchor["score"])
+            valid = True
+            for event in events[1:]:
+                candidates = [
+                    item
+                    for item in event
+                    if anchor_ts <= int(item["ts_ms"]) <= anchor_ts + max_span
+                ]
+                if not candidates:
+                    valid = False
+                    break
+                item = max(candidates, key=lambda candidate: float(candidate["score"]))
+                chosen.append(item)
+                score += float(item["score"])
+            if not valid:
+                continue
+            if best is None or score > best[0]:
+                best = (score, chosen)
+        if best is None:
+            return None
+        score, chosen = best
+        return {
+            "video_id": str(chosen[0]["video_id"]),
+            "score": score,
+            "collapsed": True,
+            "events": chosen,
+        }
+
     def _search_candidates(
         self,
         store: FaissStore,
@@ -496,11 +803,10 @@ class SearchService:
         return [(score, kf_uid) for score, kf_uid in candidates if kf_uid in allowed]
 
     def _translate(self, text: str) -> str:
-        try:
-            return self._translator.translate(text)
-        except Exception:
-            logger.exception("translate failed, dùng query gốc")
-            return text
+        return self._translator.translate(text)
+
+    def _translate_many(self, texts: list[str]) -> list[str]:
+        return self._translator.translate_many(texts)
 
     def _build_hits(
         self,

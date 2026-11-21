@@ -1,5 +1,5 @@
 ---
-name: AIC2024 KIS
+name: Mageseeker
 description: Frame-accurate video known-item search console for a timed competition.
 colors:
   canvas: "#f7f7f5"
@@ -87,7 +87,7 @@ components:
     height: "45px"
 ---
 
-# Design System: AIC2024 KIS
+# Design System: Mageseeker
 
 ## Overview
 
@@ -179,7 +179,7 @@ Controls and inputs use gently curved 8px corners; media, result tiles, and the 
 ## Components
 
 ### Command Bar
-A 56px white bar with the four-square mark, the AIC2024 KIS wordmark, one search field, index status, the filter button with a count badge, and a shortcut-help button. The search field is the only primary blue action on the bar.
+A 56px white bar with the four-square mark, the Mageseeker wordmark, one search field, index status, the filter button with a count badge, and a shortcut-help button. The search field is the only primary blue action on the bar.
 
 ### Stage
 The selected frame is the largest object on the screen. The toolbar carries the video ID, active timestamp, offset, shot, and up to three object tags; the score is deliberately absent because the tiles already carry it. Play/pause, similar, timeline, and expand are icon buttons. The media is a 16:9 black stage; when the height cap engages, the frame is letterboxed rather than cropped. The stage shows the keyframe image by default; the video stream is requested only when the operator presses play/Space, so browsing results does not pay for video. The scrubber appears once the video is armed. The follow filmstrip sits beneath the media; the full-video keyframe strip sits beneath that.

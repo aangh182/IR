@@ -13,6 +13,7 @@ type Props = {
   hit: Hit
   frames: FrameOption[]
   activeIndex: number
+  compact?: boolean
   onSelectFrame: (index: number) => void
   onSimilar: () => void
   onTimeline: () => void
@@ -24,7 +25,7 @@ function objectLabel(hit: Hit, label: string): string {
 }
 
 export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStage(
-  { hit, frames, activeIndex, onSelectFrame, onSimilar, onTimeline },
+  { hit, frames, activeIndex, compact = false, onSelectFrame, onSimilar, onTimeline },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -198,7 +199,9 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
       </div>
 
       <div
-        className="relative aspect-video max-h-[calc(100dvh-26rem)] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950"
+        className={`relative aspect-video ${
+          compact ? 'max-h-[calc(100dvh-30rem)]' : 'max-h-[calc(100dvh-26rem)]'
+        } w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950`}
         onDoubleClick={() => setLightbox(true)}
       >
         <img

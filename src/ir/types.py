@@ -96,3 +96,29 @@ class SearchResponse(BaseModel):
     elapsed_ms: int
     results: list[Hit] = Field(default_factory=list)
     dres_payload: DresPayload | None = None
+
+
+class ChainEvent(BaseModel):
+    position: int
+    hit: Hit
+    score: float
+    ts_ms: int
+
+
+class ChainHit(BaseModel):
+    video_id: str
+    score: float
+    start_ms: int
+    end_ms: int
+    span_ms: int
+    collapsed: bool = False
+    events: list[ChainEvent] = Field(default_factory=list)
+
+
+class SequentialResponse(BaseModel):
+    query_id: str
+    queries: list[str] = Field(default_factory=list)
+    translated_queries: list[str] = Field(default_factory=list)
+    model: str = ""
+    elapsed_ms: int
+    chains: list[ChainHit] = Field(default_factory=list)
