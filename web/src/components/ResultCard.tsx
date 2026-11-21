@@ -38,6 +38,7 @@ export function ResultCard({
       type="button"
       ref={anchorRef}
       data-kf-uid={hit.kf_uid ?? undefined}
+      data-hit-key={`${hit.video_id}-${hit.shot_idx}-${hit.kf_uid ?? hit.start_ms}`}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={hide}
@@ -61,83 +62,40 @@ export function ResultCard({
           triggerSimilar()
         }
       }}
-      title="Shift + click: timeline · Ctrl/Cmd + click: tìm tương tự"
+      title="Chọn frame · Ctrl/Cmd + click: tìm tương tự · Shift + click: xem lân cận"
       aria-pressed={selected}
-      className={`group relative overflow-hidden rounded-lg border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f3ee] ${
+      aria-label={`${hit.video_id}, ${formatMs(displayTs)}, điểm ${hit.score.toFixed(4)}`}
+      className={`group relative block w-full overflow-hidden rounded-xl border bg-slate-100 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f7f7f5] ${
         selected
-          ? 'border-amber-500 bg-amber-50/60 ring-1 ring-amber-500/20'
-          : 'border-slate-200 bg-white hover:border-slate-400'
+          ? 'border-blue-600 ring-2 ring-blue-600/20'
+          : 'border-slate-200 hover:border-slate-400'
       }`}
     >
-      <div className="relative aspect-video overflow-hidden bg-slate-900">
+      <div className="relative aspect-video overflow-hidden">
         <img
           src={hit.keyframe_url}
-          alt={`${hit.video_id} @ ${formatMs(displayTs)}`}
+          alt=""
           loading="lazy"
-          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+          decoding="async"
+          className="h-full w-full object-cover"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/0 to-slate-950/10" />
+
+        <span className="absolute bottom-1.5 left-1.5 max-w-[calc(100%-3rem)] truncate rounded bg-slate-950/75 px-1.5 py-0.5 font-mono text-[10px] leading-tight text-white backdrop-blur-sm">
+          {hit.video_id} · {formatMs(displayTs)}
+        </span>
 
         {showScore && (
-          <span className="absolute right-2 top-2 rounded border border-white/10 bg-slate-950/75 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300 backdrop-blur">
+          <span className="absolute right-1.5 top-1.5 rounded bg-slate-950/75 px-1.5 py-0.5 font-mono text-[10px] leading-tight text-white tabular-nums backdrop-blur-sm">
             {hit.score.toFixed(4)}
           </span>
         )}
 
         {hit.is_boilerplate && (
-          <span className="absolute left-2 top-2 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-            boilerplate
+          <span className="absolute left-1.5 top-1.5 rounded bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-950">
+            B
           </span>
         )}
-
-        <div className="absolute inset-x-2 bottom-2 flex items-end justify-between gap-2">
-          <span className="rounded bg-slate-950/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-200 backdrop-blur">
-            {formatMs(displayTs)}
-          </span>
-          <span className="rounded bg-slate-950/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 backdrop-blur">
-            shot {hit.shot_idx}
-          </span>
-        </div>
       </div>
-
-      <div className="space-y-1.5 p-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <p className="truncate font-mono text-[11px] text-slate-900">{hit.video_id}</p>
-          <span className="shrink-0 font-mono text-[10px] text-slate-500">
-            {formatMs(hit.end_ms - hit.start_ms)}
-          </span>
-        </div>
-
-        {hit.evidence.objects.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {[...hit.evidence.objects]
-              .sort(
-                (left, right) =>
-                  (hit.evidence.object_counts[right] ?? 0) -
-                  (hit.evidence.object_counts[left] ?? 0),
-              )
-              .slice(0, 5)
-              .map((label) => {
-                const count = hit.evidence.object_counts[label] ?? 0
-                return (
-                  <span
-                    key={label}
-                    className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-600"
-                  >
-                    {label}
-                    {count > 1 && (
-                      <span className="ml-0.5 font-mono text-[9px] text-slate-500">
-                        ×{count}
-                      </span>
-                    )}
-                  </span>
-                )
-              })}
-          </div>
-        )}
-      </div>
-
-      {selected && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-amber-500" />}
       {node}
     </button>
   )

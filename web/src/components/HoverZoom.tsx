@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-const DELAY_MS = 500
-const MAX_WIDTH = 448
+const DELAY_MS = 250
+const MAX_WIDTH = 560
 const ASPECT = 9 / 16
 const GAP = 12
 const MARGIN = 12
@@ -91,7 +91,7 @@ export function useHoverZoom<T extends HTMLElement>(src: string | null) {
               src={src}
               alt=""
               decoding="async"
-              className="h-full w-full rounded-lg border border-white/10 object-cover shadow-2xl shadow-slate-950/50"
+              className="h-full w-full rounded-xl border border-white/10 object-cover shadow-2xl shadow-slate-950/50"
             />
           </div>,
           document.body,

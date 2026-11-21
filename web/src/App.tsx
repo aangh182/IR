@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
-import { DresPanel } from './components/DresPanel'
+import { FilterPopover } from './components/FilterPopover'
+import { Icon } from './components/Icon'
+import { MediaStage } from './components/MediaStage'
+import type { MediaStageHandle } from './components/MediaStage'
 import { ObjectFilterDrawer } from './components/ObjectFilterDrawer'
 import { ResultCard } from './components/ResultCard'
-import { VideoPanel } from './components/VideoPanel'
+import { ShortcutsDialog } from './components/ShortcutsDialog'
+import { SubmitBar } from './components/SubmitBar'
+import type { SubmitHandle } from './components/SubmitBar'
 import { formatMs } from './format'
 import type {
   FrameOption,
@@ -17,16 +22,18 @@ import type {
   Stats,
 } from './types'
 
-const TOP_K_OPTIONS = [20, 30, 40, 50]
+const EXAMPLES = [
+  'người phát biểu tại hội nghị',
+  'xe màu đỏ chạy trên đường',
+  'người dẫn chương trình đứng trước màn hình',
+]
 
-async function responseError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { detail?: unknown }
-    if (typeof body.detail === 'string') return body.detail
-  } catch {
-    // fall through to HTTP status
-  }
-  return `HTTP ${response.status}`
+type RunOptions = {
+  includeBoilerplate?: boolean
+  dedup?: boolean
+  topK?: number
+  model?: string
+  objects?: ObjectFilter[]
 }
 
 type ResultsSnapshot = {
@@ -44,10 +51,53 @@ type ResultsSnapshot = {
   }
 }
 
+async function responseError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown }
+    if (typeof body.detail === 'string') return body.detail
+  } catch {
+    // fall through to HTTP status
+  }
+  return `HTTP ${response.status}`
+}
+
 function serializeObjects(filters: ObjectFilter[]): string[] {
   return filters.map((item) =>
     item.minCount > 1 ? `${item.label}:${item.minCount}` : item.label,
   )
+}
+
+function framesOf(hit: Hit): FrameOption[] {
+  if (hit.frames.length > 0) return hit.frames
+  return [
+    {
+      ts_ms: hit.start_ms,
+      start_ms: hit.start_ms,
+      end_ms: hit.end_ms,
+      url: hit.keyframe_url,
+      is_keyframe: true,
+    },
+  ]
+}
+
+function keyframeIndex(hit: Hit): number {
+  const index = framesOf(hit).findIndex((frame) => frame.is_keyframe)
+  return index >= 0 ? index : 0
+}
+
+function keyframeTime(hit: Hit): number {
+  return framesOf(hit).find((frame) => frame.is_keyframe)?.ts_ms ?? hit.start_ms
+}
+
+function hitKey(hit: Hit): string {
+  return `${hit.video_id}-${hit.shot_idx}-${hit.kf_uid ?? hit.start_ms}`
+}
+
+function isSameHit(left: Hit, right: Hit): boolean {
+  if (left.kf_uid !== null && right.kf_uid !== null) {
+    return left.kf_uid === right.kf_uid
+  }
+  return left.video_id === right.video_id && left.shot_idx === right.shot_idx
 }
 
 function App() {
@@ -56,7 +106,11 @@ function App() {
   const [statusError, setStatusError] = useState<string | null>(null)
 
   const [query, setQuery] = useState('')
-  const queryRef = useRef<HTMLTextAreaElement | null>(null)
+  const queryRef = useRef<HTMLInputElement | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  const mediaRef = useRef<MediaStageHandle | null>(null)
+  const submitRef = useRef<SubmitHandle | null>(null)
+
   const [topK, setTopK] = useState(20)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
@@ -65,19 +119,21 @@ function App() {
   const [objectOptions, setObjectOptions] = useState<ObjectFacet[]>([])
   const [includeBoilerplate, setIncludeBoilerplate] = useState(false)
   const [dedup, setDedup] = useState(true)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+
   const [results, setResults] = useState<Hit[]>([])
   const [selected, setSelected] = useState<Hit | null>(null)
+  const [activeFrameIndex, setActiveFrameIndex] = useState<number | null>(null)
   const [elapsed, setElapsed] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activeFrame, setActiveFrame] = useState<FrameOption | null>(null)
   const [lastQuery, setLastQuery] = useState('')
   const [translatedQuery, setTranslatedQuery] = useState('')
   const [similarSource, setSimilarSource] = useState<Hit | null>(null)
   const [timelineSource, setTimelineSource] = useState<Hit | null>(null)
   const [previousResults, setPreviousResults] = useState<ResultsSnapshot | null>(null)
-  const handleActiveFrame = useCallback((frame: FrameOption) => setActiveFrame(frame), [])
 
   useEffect(() => {
     let cancelled = false
@@ -123,34 +179,71 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!timelineSource?.kf_uid) return
-    const target = document.querySelector(
-      `[data-kf-uid="${timelineSource.kf_uid}"]`,
-    )
-    target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [timelineSource, results])
+    if (!selected) return
+    const target = document.querySelector(`[data-hit-key="${hitKey(selected)}"]`)
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [selected])
 
-  useEffect(() => {
-    const element = queryRef.current
-    if (!element) return
-    const resize = () => {
-      element.style.height = 'auto'
-      element.style.height = `${element.scrollHeight + 2}px`
-    }
-    resize()
-    window.addEventListener('resize', resize)
-    return () => window.removeEventListener('resize', resize)
-  }, [query])
+  const online = health?.status === 'ok'
+  const indexReady = health?.index_ready === true
+  const selectedModelInfo = models.find((item) => item.name === selectedModel) ?? null
+  const defaultModelName = models.find((item) => item.default)?.name ?? models[0]?.name ?? ''
+  const keyframeCount = selectedModelInfo?.keyframes ?? health?.index_count ?? 0
 
-  async function runSearch(
-    text: string,
-    options?: { includeBoilerplate?: boolean; dedup?: boolean },
-  ) {
+  const selectedFrames = selected ? framesOf(selected) : []
+  const selectedKeyframeIndex = selected ? keyframeIndex(selected) : 0
+  const activeIndex = selected
+    ? Math.min(
+        activeFrameIndex ?? selectedKeyframeIndex,
+        Math.max(0, selectedFrames.length - 1),
+      )
+    : 0
+  const activeFrame = selected ? (selectedFrames[activeIndex] ?? null) : null
+
+  const modelChanged =
+    Boolean(selectedModel) && selectedModel !== defaultModelName
+  const filtersActive =
+    objectFilters.length > 0 ||
+    includeBoilerplate ||
+    !dedup ||
+    topK !== 20 ||
+    modelChanged
+  const filterCount =
+    objectFilters.length +
+    (includeBoilerplate ? 1 : 0) +
+    (!dedup ? 1 : 0) +
+    (topK !== 20 ? 1 : 0) +
+    (modelChanged ? 1 : 0)
+
+  const resultsLabel = loading
+    ? 'Đang tìm...'
+    : hasSearched
+      ? `${results.length} ${
+          similarSource
+            ? 'frame tương tự'
+            : timelineSource
+              ? 'keyframe lân cận'
+              : 'keyframe'
+        }`
+      : 'Kết quả'
+
+  function focusStage() {
+    window.requestAnimationFrame(() => {
+      queryRef.current?.blur()
+      stageRef.current?.focus()
+    })
+  }
+
+  async function runSearch(text: string, options: RunOptions = {}) {
     const trimmed = text.trim()
     if (!trimmed || loading) return
 
-    const showBoilerplate = options?.includeBoilerplate ?? includeBoilerplate
-    const useDedup = options?.dedup ?? dedup
+    const showBoilerplate = options.includeBoilerplate ?? includeBoilerplate
+    const useDedup = options.dedup ?? dedup
+    const useTopK = options.topK ?? topK
+    const useModel = options.model ?? selectedModel
+    const useObjects = options.objects ?? objectFilters
+
     setLoading(true)
     setError(null)
     setHasSearched(true)
@@ -166,9 +259,9 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: trimmed,
-          top_k: topK,
-          objects: serializeObjects(objectFilters),
-          model: selectedModel || undefined,
+          top_k: useTopK,
+          objects: serializeObjects(useObjects),
+          model: useModel || undefined,
           include_boilerplate: showBoilerplate,
           dedup: useDedup,
         }),
@@ -178,13 +271,14 @@ function App() {
       const data = (await response.json()) as SearchResponse
       setResults(data.results)
       setSelected(data.results[0] ?? null)
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setTranslatedQuery(data.translated_query ?? '')
       setElapsed(data.elapsed_ms)
+      focusStage()
     } catch (err) {
       setResults([])
       setSelected(null)
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setElapsed(null)
       setError(err instanceof Error ? err.message : 'Lỗi không xác định')
     } finally {
@@ -192,18 +286,19 @@ function App() {
     }
   }
 
-  async function runSimilar(
-    hit: Hit,
-    options?: { includeBoilerplate?: boolean; dedup?: boolean },
-  ) {
+  async function runSimilar(hit: Hit, options: RunOptions = {}) {
     if (loading) return
     if (!hit.kf_uid) {
       setError('Frame này không có kf_uid trong index.')
       return
     }
 
-    const showBoilerplate = options?.includeBoilerplate ?? includeBoilerplate
-    const useDedup = options?.dedup ?? dedup
+    const showBoilerplate = options.includeBoilerplate ?? includeBoilerplate
+    const useDedup = options.dedup ?? dedup
+    const useTopK = options.topK ?? topK
+    const useModel = options.model ?? selectedModel
+    const useObjects = options.objects ?? objectFilters
+
     if (!similarSource && !timelineSource) {
       setPreviousResults({
         results,
@@ -220,6 +315,7 @@ function App() {
         },
       })
     }
+
     setLoading(true)
     setError(null)
     setHasSearched(true)
@@ -234,9 +330,9 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kf_uid: hit.kf_uid,
-          top_k: topK,
-          objects: serializeObjects(objectFilters),
-          model: selectedModel || undefined,
+          top_k: useTopK,
+          objects: serializeObjects(useObjects),
+          model: useModel || undefined,
           include_boilerplate: showBoilerplate,
           dedup: useDedup,
         }),
@@ -246,12 +342,13 @@ function App() {
       const data = (await response.json()) as SearchResponse
       setResults(data.results)
       setSelected(data.results[0] ?? null)
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setElapsed(data.elapsed_ms)
+      focusStage()
     } catch (err) {
       setResults([])
       setSelected(null)
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setElapsed(null)
       setError(err instanceof Error ? err.message : 'Lỗi không xác định')
     } finally {
@@ -282,6 +379,7 @@ function App() {
         },
       })
     }
+
     setLoading(true)
     setError(null)
     setHasSearched(true)
@@ -305,12 +403,13 @@ function App() {
           data.results[0] ??
           null,
       )
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setElapsed(data.elapsed_ms)
+      focusStage()
     } catch (err) {
       setResults([])
       setSelected(null)
-      setActiveFrame(null)
+      setActiveFrameIndex(null)
       setElapsed(null)
       setError(err instanceof Error ? err.message : 'Lỗi không xác định')
     } finally {
@@ -318,11 +417,26 @@ function App() {
     }
   }
 
+  function runCurrent(options: RunOptions = {}) {
+    if (loading) return
+    if (similarSource) {
+      void runSimilar(similarSource, options)
+      return
+    }
+    if (timelineSource) {
+      void runTimeline(timelineSource)
+      return
+    }
+    if (query.trim()) void runSearch(query, options)
+  }
+
   function submitSearch() {
     if (!query.trim()) {
       setError('Nhập mô tả sự kiện trước khi tìm.')
+      queryRef.current?.focus()
       return
     }
+    if (filtersOpen) setFiltersOpen(false)
     void runSearch(query)
   }
 
@@ -333,10 +447,8 @@ function App() {
 
   const handleSelect = useCallback((hit: Hit) => {
     setSelected(hit)
-    setActiveFrame(null)
+    setActiveFrameIndex(null)
   }, [])
-
-  const closeObjectDrawer = useCallback(() => setObjectDrawerOpen(false), [])
 
   function handleSimilar(hit: Hit) {
     void runSimilar(hit)
@@ -357,6 +469,7 @@ function App() {
     setHasSearched(true)
     setResults(snapshot.results)
     setSelected(snapshot.source)
+    setActiveFrameIndex(null)
     setElapsed(snapshot.elapsed)
     setLastQuery(snapshot.lastQuery)
     setTranslatedQuery(snapshot.translatedQuery)
@@ -365,559 +478,479 @@ function App() {
     setObjectFilters(snapshot.filters.objectFilters)
     setTopK(snapshot.filters.topK)
     setSelectedModel(snapshot.filters.selectedModel)
-    setActiveFrame(null)
   }, [loading, previousResults])
 
   function removeObject(label: string) {
-    setObjectFilters((current) => current.filter((item) => item.label !== label))
+    const next = objectFilters.filter((item) => item.label !== label)
+    setObjectFilters(next)
+    runCurrent({ objects: next })
   }
 
   function applyObjectFilters() {
     setObjectDrawerOpen(false)
-    if (loading) return
-    if (similarSource) {
-      void runSimilar(similarSource)
-    } else if (timelineSource) {
-      void runTimeline(timelineSource)
-    } else if (query.trim()) {
-      void runSearch(query)
-    }
+    runCurrent({ objects: objectFilters })
   }
 
   function resetFilters() {
+    const nextModel = defaultModelName
     setObjectFilters([])
     setIncludeBoilerplate(false)
     setDedup(true)
     setTopK(20)
+    setSelectedModel(nextModel)
     setError(null)
+    runCurrent({
+      objects: [],
+      includeBoilerplate: false,
+      dedup: true,
+      topK: 20,
+      model: nextModel,
+    })
   }
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape' || event.defaultPrevented) return
-      if (objectDrawerOpen) return
-      if (!similarSource && !timelineSource) return
-      const target = event.target as HTMLElement | null
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
-      event.preventDefault()
-      backToResults()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [objectDrawerOpen, similarSource, timelineSource, backToResults])
+  function changeModel(next: string) {
+    setSelectedModel(next)
+    runCurrent({ model: next })
+  }
 
-  const online = health?.status === 'ok'
-  const indexReady = health?.index_ready === true
-  const selectedModelInfo = models.find((item) => item.name === selectedModel) ?? null
+  function changeTopK(next: number) {
+    setTopK(next)
+    runCurrent({ topK: next })
+  }
 
-  function keyframeTime(hit: Hit): number {
-    return hit.frames.find((frame) => frame.is_keyframe)?.ts_ms ?? hit.start_ms
+  function changeBoilerplate(next: boolean) {
+    setIncludeBoilerplate(next)
+    runCurrent({ includeBoilerplate: next })
+  }
+
+  function changeDedup(next: boolean) {
+    setDedup(next)
+    runCurrent({ dedup: next })
+  }
+
+  function openObjectDrawer() {
+    setFiltersOpen(false)
+    setObjectDrawerOpen(true)
+  }
+
+  const closeObjectDrawer = useCallback(() => setObjectDrawerOpen(false), [])
+
+  function moveSelection(delta: number) {
+    if (results.length === 0) return
+    const current = selected
+      ? results.findIndex((item) => isSameHit(item, selected))
+      : -1
+    const base = current === -1 ? 0 : current
+    const next = Math.max(0, Math.min(results.length - 1, base + delta))
+    if (next === current) return
+    handleSelect(results[next])
+  }
+
+  function stepFrame(delta: number) {
+    if (!selected) return
+    const frames = framesOf(selected)
+    const current = activeFrameIndex ?? keyframeIndex(selected)
+    const next = Math.max(0, Math.min(frames.length - 1, current + delta))
+    setActiveFrameIndex(next)
   }
 
   function isHitSelected(hit: Hit): boolean {
-    if (!selected) return false
-    if (selected.kf_uid !== null && hit.kf_uid !== null) {
-      return selected.kf_uid === hit.kf_uid
-    }
-    return selected.video_id === hit.video_id && selected.shot_idx === hit.shot_idx
+    return selected ? isSameHit(hit, selected) : false
   }
 
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {})
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.defaultPrevented) return
+    const target = event.target as HTMLElement | null
+    const typing = Boolean(
+      target?.closest('input, textarea, select, [contenteditable="true"]'),
+    )
+
+    if (event.key === '/' && !typing) {
+      event.preventDefault()
+      queryRef.current?.focus()
+      queryRef.current?.select()
+      return
+    }
+
+    if (event.key === 'Escape') {
+      if (shortcutsOpen) {
+        setShortcutsOpen(false)
+        return
+      }
+      if (filtersOpen) {
+        setFiltersOpen(false)
+        return
+      }
+      if (objectDrawerOpen) return
+      if (similarSource || timelineSource) {
+        event.preventDefault()
+        backToResults()
+      }
+      return
+    }
+
+    if (shortcutsOpen || filtersOpen || objectDrawerOpen) return
+    if (typing) return
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+
+    switch (event.key) {
+      case '?':
+        event.preventDefault()
+        setShortcutsOpen(true)
+        break
+      case 'ArrowRight':
+        event.preventDefault()
+        moveSelection(1)
+        break
+      case 'ArrowLeft':
+        event.preventDefault()
+        moveSelection(-1)
+        break
+      case 'ArrowDown':
+        event.preventDefault()
+        moveSelection(2)
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        moveSelection(-2)
+        break
+      case ' ':
+        event.preventDefault()
+        mediaRef.current?.togglePlay()
+        break
+      case 's':
+      case 'S':
+        event.preventDefault()
+        submitRef.current?.submit()
+        break
+      case 'c':
+      case 'C':
+        event.preventDefault()
+        void submitRef.current?.copy()
+        break
+      case '[':
+        event.preventDefault()
+        stepFrame(-1)
+        break
+      case ']':
+        event.preventDefault()
+        stepFrame(1)
+        break
+      case 'f':
+      case 'F':
+        event.preventDefault()
+        setFiltersOpen((value) => !value)
+        break
+      case 'r':
+      case 'R':
+        event.preventDefault()
+        if (selected) handleSimilar(selected)
+        break
+      case 't':
+      case 'T':
+        event.preventDefault()
+        if (selected) handleTimeline(selected)
+        break
+      default:
+        break
+    }
+  }
+
+  useEffect(() => {
+    keyHandlerRef.current = onKeyDown
+  })
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandlerRef.current(event)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [])
+
+  const statusTitle = [
+    selectedModelInfo
+      ? `${selectedModelInfo.name} · ${selectedModelInfo.dim}d`
+      : null,
+    stats ? `${stats.videos.toLocaleString('vi-VN')} video · ${stats.keyframes.toLocaleString('vi-VN')} keyframe` : null,
+    statusError,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
-    <div className="min-h-dvh bg-[#f5f3ee] text-slate-900 xl:h-dvh xl:overflow-hidden">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-[#fbfaf7]/95 backdrop-blur xl:static">
-        <div className="flex h-14 items-center justify-between gap-3 px-4 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
-              K
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">AIC2024</p>
-              <h1 className="truncate text-sm font-semibold tracking-tight text-slate-900">
-                Known-Item Search <span className="font-normal text-slate-400">/ console</span>
-              </h1>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px]">
-            <span
-              className={`hidden items-center gap-1.5 rounded border px-2 py-1 sm:flex ${
-                indexReady
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                  : 'border-amber-300 bg-amber-50 text-amber-700'
-              }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  indexReady ? 'bg-emerald-500' : 'bg-amber-500'
-                }`}
-              />
-              {indexReady
-                ? `${(
-                    selectedModelInfo?.keyframes ??
-                    health?.index_count ??
-                    0
-                  ).toLocaleString('vi-VN')} keyframes`
-                : 'Index chưa sẵn sàng'}
-            </span>
-            <span className="flex items-center gap-1.5 rounded border border-slate-200 bg-white px-2 py-1 text-slate-600">
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  online ? 'bg-emerald-500' : statusError ? 'bg-red-500' : 'bg-slate-400'
-                }`}
-              />
-              <span className="hidden sm:inline">
-                {statusError ? 'API offline' : online ? `API ${health?.version}` : 'Đang kiểm tra...'}
-              </span>
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-1 xl:h-[calc(100dvh-3.5rem)] xl:grid-cols-[300px_minmax(0,1fr)_400px] 2xl:grid-cols-[320px_minmax(0,1fr)_440px]">
-        <aside
-          aria-label="Tìm kiếm và bộ lọc"
-          className="scroll-slim border-b border-slate-200 bg-[#fbfaf7] xl:min-h-0 xl:overflow-y-auto xl:border-b-0 xl:border-r"
-        >
-          <form
-            onSubmit={handleSubmit}
-            autoComplete="off"
-            className="flex min-h-full flex-col gap-5 p-4 sm:p-5"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Search</p>
-                <h2 className="mt-1 text-sm font-semibold tracking-tight text-slate-900">
-                  Tìm keyframe
-                </h2>
-              </div>
-              <span className="rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] text-slate-500">
-                {loading ? 'searching' : elapsed !== null ? `${elapsed} ms` : 'idle'}
+    <div className="min-h-dvh bg-[#f7f7f5] text-slate-900 min-[1100px]:flex min-[1100px]:h-dvh min-[1100px]:flex-col min-[1100px]:overflow-hidden">
+      <header className="sticky top-0 z-30 shrink-0 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex h-14 w-full max-w-[1800px] items-center gap-2 px-3 sm:gap-3 sm:px-5">
+          <div className="flex shrink-0 items-center gap-2">
+            <div aria-hidden="true" className="grid h-8 w-8 place-items-center rounded-lg bg-slate-900">
+              <span className="grid grid-cols-2 gap-[3px]">
+                <span className="h-1.5 w-1.5 rounded-[1px] bg-white" />
+                <span className="h-1.5 w-1.5 rounded-[1px] bg-white" />
+                <span className="h-1.5 w-1.5 rounded-[1px] bg-white" />
+                <span className="h-1.5 w-1.5 rounded-[1px] bg-white" />
               </span>
             </div>
+            <span className="hidden text-sm font-semibold tracking-tight text-slate-900 sm:inline">
+              AIC2024 <span className="font-normal text-slate-500">KIS</span>
+            </span>
+          </div>
 
-            <div className="space-y-2">
-              <label
-                htmlFor="query"
-                className="block text-[10px] uppercase tracking-[0.18em] text-slate-500"
-              >
-                Mô tả sự kiện
-              </label>
-              <textarea
-                id="query"
+          <form onSubmit={handleSubmit} autoComplete="off" className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Icon
+                name="search"
+                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+              />
+              <input
                 ref={queryRef}
                 value={query}
-                rows={1}
                 onChange={(event) => {
                   setQuery(event.target.value)
                   if (error) setError(null)
                 }}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault()
-                    submitSearch()
-                  }
-                }}
-                placeholder="a person speaking at a conference"
+                type="search"
+                enterKeyHint="search"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
                 spellCheck={false}
-                enterKeyHint="search"
-                className="block max-h-40 min-h-[46px] w-full resize-none overflow-y-auto rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-base leading-relaxed text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15 sm:text-sm"
+                placeholder="Mô tả sự kiện..."
+                aria-label="Mô tả sự kiện"
+                className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/70 pl-9 pr-10 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-500 hover:border-slate-300 focus:border-blue-600 focus:bg-white focus:ring-2 focus:ring-blue-600/15"
               />
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#fbfaf7] disabled:cursor-wait disabled:bg-slate-400"
-                >
-                  {loading ? 'Đang tìm...' : 'Tìm kiếm'}
-                </button>
-                <select
-                  id="top-k"
-                  aria-label="Top K"
-                  value={topK}
-                  onChange={(event) => setTopK(Number(event.target.value))}
-                  className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-3 text-sm font-medium text-slate-700 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15"
-                >
-                  {TOP_K_OPTIONS.map((value) => (
-                    <option key={value} value={value}>
-                      Top {value}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {error && (
-                <p
-                  role="alert"
-                  className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-red-700"
-                >
-                  {error}
-                </p>
-              )}
+              <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-white px-1 py-0.5 font-mono text-[10px] text-slate-500 sm:block">
+                /
+              </kbd>
             </div>
-
-            <div className="border-t border-slate-200 pt-4">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Bộ lọc</p>
-                {(objectFilters.length > 0 || includeBoilerplate || !dedup || topK !== 20) && (
-                  <button
-                    type="button"
-                    onClick={resetFilters}
-                    className="text-[11px] text-slate-500 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
-                  >
-                    Đặt lại
-                  </button>
-                )}
-              </div>
-
-              <div className="mt-3 space-y-3">
-                <label htmlFor="model" className="block">
-                  <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-                    Embedding
-                  </span>
-                  <select
-                    id="model"
-                    value={selectedModel}
-                    onChange={(event) => setSelectedModel(event.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base text-slate-900 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15 sm:text-sm"
-                  >
-                    {models.length === 0 && <option value="">(default)</option>}
-                    {models.map((item) => (
-                      <option key={item.name} value={item.name} disabled={!item.available}>
-                        {item.name} · {item.dim}d
-                        {item.available ? '' : ' · chưa có index'}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <div>
-                  <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-                    Object (COCO)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setObjectDrawerOpen(true)}
-                    aria-haspopup="dialog"
-                    className="mt-1.5 flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left transition hover:border-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/15"
-                  >
-                    <span className="min-w-0 truncate text-sm text-slate-700">
-                      {objectFilters.length === 0
-                        ? 'Chọn tag và số lượng'
-                        : `${objectFilters.length} tag đang lọc`}
-                    </span>
-                    {objectFilters.length > 0 && (
-                      <span
-                        aria-hidden="true"
-                        className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 px-1.5 font-mono text-[10px] font-semibold tabular-nums text-amber-800"
-                      >
-                        {objectFilters.length}
-                      </span>
-                    )}
-                  </button>
-                  {objectFilters.length > 0 && (
-                    <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                      {objectFilters.map((item) => (
-                        <li
-                          key={item.label}
-                          className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50/70 py-0.5 pl-2 pr-1 text-[10px] text-amber-900"
-                        >
-                          <span className="max-w-32 truncate font-medium">{item.label}</span>
-                          <span className="font-mono tabular-nums text-amber-700/80">
-                            ≥{item.minCount}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => removeObject(item.label)}
-                            aria-label={`Bỏ ${item.label}`}
-                            className="flex h-4 w-4 items-center justify-center rounded-full text-amber-700/70 transition hover:bg-white hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
-                          >
-                            <svg
-                              viewBox="0 0 12 12"
-                              aria-hidden="true"
-                              className="h-2.5 w-2.5"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                            >
-                              <path d="M3 3l6 6M9 3l-6 6" />
-                            </svg>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                <div className="grid gap-2">
-                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                    <span className="text-xs text-slate-700">Hiện boilerplate</span>
-                    <input
-                      type="checkbox"
-                      checked={includeBoilerplate}
-                      onChange={(event) => {
-                        const next = event.target.checked
-                        setIncludeBoilerplate(next)
-                        if (hasSearched) {
-                          if (similarSource) {
-                            void runSimilar(similarSource, { includeBoilerplate: next })
-                          } else if (timelineSource) {
-                            void runTimeline(timelineSource)
-                          } else if (query.trim()) {
-                            void runSearch(query, { includeBoilerplate: next })
-                          }
-                        }
-                      }}
-                      className="h-4 w-4 accent-amber-500"
-                    />
-                  </label>
-                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                    <span className="text-xs text-slate-700">Dedup ảnh trùng</span>
-                    <input
-                      type="checkbox"
-                      checked={dedup}
-                      onChange={(event) => {
-                        const next = event.target.checked
-                        setDedup(next)
-                        if (hasSearched) {
-                          if (similarSource) {
-                            void runSimilar(similarSource, { dedup: next })
-                          } else if (timelineSource) {
-                            void runTimeline(timelineSource)
-                          } else if (query.trim()) {
-                            void runSearch(query, { dedup: next })
-                          }
-                        }
-                      }}
-                      className="h-4 w-4 accent-amber-500"
-                    />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-auto space-y-3 border-t border-slate-200 pt-4">
-              {health && !indexReady && (
-                <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
-                  Chưa thấy embedding artifacts. Chạy notebook Kaggle rồi{' '}
-                  <code className="font-mono">uv run ir import-shards &lt;zip&gt;</code>.
-                </p>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-wait disabled:bg-slate-300 sm:px-4"
+            >
+              {loading && (
+                <span
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                />
               )}
-              {statusError && (
-                <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-red-700">
-                  Không kết nối được API: {statusError}
-                </p>
-              )}
-
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Corpus</p>
-                <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                  <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                    <dt className="text-slate-500">Videos</dt>
-                    <dd className="font-mono text-slate-900">
-                      {stats?.videos.toLocaleString('vi-VN') ?? '—'}
-                    </dd>
-                  </div>
-                  <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                    <dt className="text-slate-500">Keyframes</dt>
-                    <dd className="font-mono text-slate-900">
-                      {stats?.keyframes.toLocaleString('vi-VN') ?? '—'}
-                    </dd>
-                  </div>
-                  <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                    <dt className="text-slate-500">Shots</dt>
-                    <dd className="font-mono text-slate-900">
-                      {stats?.shots.toLocaleString('vi-VN') ?? '—'}
-                    </dd>
-                  </div>
-                  <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                    <dt className="text-slate-500">Follow</dt>
-                    <dd className="font-mono text-slate-900">
-                      {stats?.follow_frames.toLocaleString('vi-VN') ?? '—'}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-
-              {selectedModelInfo && (
-                <p className="font-mono text-[10px] leading-relaxed text-slate-500">
-                  {selectedModelInfo.name} · {selectedModelInfo.dim}d ·{' '}
-                  {selectedModelInfo.keyframes !== null
-                    ? `${selectedModelInfo.keyframes.toLocaleString('vi-VN')} kf`
-                    : 'chưa có index'}
-                  {selectedModelInfo.boilerplate !== null &&
-                    ` · ${selectedModelInfo.boilerplate.toLocaleString('vi-VN')} boiler`}
-                </p>
-              )}
-            </div>
+              <span className="hidden sm:inline">{loading ? 'Đang tìm' : 'Tìm'}</span>
+              <span className="sm:hidden">{loading ? '' : 'Tìm'}</span>
+            </button>
           </form>
-        </aside>
 
-        <main
-          aria-label="Kết quả tìm kiếm"
-          className="panel-grid scroll-slim min-h-0 xl:overflow-y-auto"
-        >
-          <div className="space-y-4 p-4 sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Results</p>
-                <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">
-                  {loading
-                    ? 'Đang tìm...'
-                    : hasSearched
-                      ? `${results.length} ${
-                          similarSource
-                            ? 'frame tương tự'
-                            : timelineSource
-                              ? 'keyframe lân cận'
-                              : 'keyframe'
-                        }`
-                      : 'Chưa có truy vấn'}
-                </h2>
-                {hasSearched && lastQuery && (
-                  <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-600">
-                    {translatedQuery && translatedQuery !== lastQuery ? (
-                      <>
-                        <span className="text-slate-500">{lastQuery}</span>
-                        <span className="mx-1.5 text-slate-400">→</span>
-                        <span>{translatedQuery}</span>
-                      </>
-                    ) : (
-                      lastQuery
-                    )}
+          <span
+            title={statusTitle}
+            className="hidden shrink-0 items-center gap-1.5 text-xs text-slate-500 md:flex"
+          >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 rounded-full ${
+                statusError
+                  ? 'bg-red-500'
+                  : indexReady
+                    ? 'bg-blue-500'
+                    : online
+                      ? 'bg-amber-500'
+                      : 'bg-slate-400'
+              }`}
+            />
+            {statusError
+              ? 'API lỗi'
+              : indexReady
+                ? `${keyframeCount.toLocaleString('vi-VN')} kf`
+                : online
+                  ? 'Chưa có index'
+                  : 'Đang kết nối'}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((value) => !value)}
+            aria-expanded={filtersOpen}
+            aria-label="Bộ lọc"
+            className={`relative flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 ${
+              filtersOpen || filtersActive
+                ? 'border-blue-200 bg-blue-50 text-blue-800'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+            }`}
+          >
+            <Icon name="filter" className="h-4 w-4" />
+            <span className="hidden sm:inline">Bộ lọc</span>
+            {filterCount > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 font-mono text-[9px] font-semibold text-white">
+                {filterCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="Phím tắt"
+            title="Phím tắt (?)"
+            className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 sm:flex"
+          >
+            <Icon name="keyboard" className="h-4 w-4" />
+          </button>
+        </div>
+        {loading && (
+          <div className="h-0.5 w-full overflow-hidden bg-blue-100">
+            <div className="h-full w-1/2 animate-pulse bg-blue-600" />
+          </div>
+        )}
+      </header>
+
+      {!hasSearched && !query && (
+        <div className="shrink-0 border-b border-slate-100 bg-white px-3 py-1.5 sm:px-5">
+          <div className="mx-auto flex w-full max-w-[1800px] items-center gap-2 overflow-x-auto">
+            <span className="shrink-0 text-[11px] text-slate-500">Thử:</span>
+            {EXAMPLES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                onClick={() => {
+                  setQuery(example)
+                  void runSearch(example)
+                }}
+                className="shrink-0 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {translatedQuery && translatedQuery !== lastQuery && (
+        <div className="shrink-0 border-b border-slate-100 bg-white px-3 py-1.5 sm:px-5">
+          <p className="mx-auto w-full max-w-[1800px] truncate text-[11px] text-slate-500">
+            <span className="text-slate-500">Dịch:</span> {translatedQuery}
+          </p>
+        </div>
+      )}
+
+      <div className="mx-auto flex w-full max-w-[1800px] flex-1 min-h-0 flex-col px-3 pb-40 pt-3 sm:px-5 min-[1100px]:pb-20">
+        {error && (
+          <div
+            role="alert"
+            className="mb-2 flex shrink-0 items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+          >
+            <span className="min-w-0">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              aria-label="Đóng lỗi"
+              className="shrink-0 text-red-700/70 transition-colors hover:text-red-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+            >
+              <Icon name="close" className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        <div className="grid min-h-0 grid-cols-1 gap-3 min-[1100px]:flex-1 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(420px,36%)]">
+          <div
+            ref={stageRef}
+            tabIndex={-1}
+            className="scroll-slim flex min-h-0 flex-col outline-none min-[1100px]:overflow-y-auto min-[1100px]:pr-1"
+          >
+            {selected ? (
+              <MediaStage
+                ref={mediaRef}
+                hit={selected}
+                frames={selectedFrames}
+                activeIndex={activeIndex}
+                onSelectFrame={setActiveFrameIndex}
+                onSimilar={() => handleSimilar(selected)}
+                onTimeline={() => handleTimeline(selected)}
+              />
+            ) : loading ? (
+              <div className="my-auto space-y-2" aria-busy="true">
+                <div className="aspect-video w-full animate-pulse rounded-xl bg-slate-200/70" />
+                <div className="h-3 w-40 animate-pulse rounded bg-slate-200/70" />
+                <div className="flex gap-1.5">
+                  {Array.from({ length: 8 }).map((_, index) => (
+                    <div key={index} className="h-14 w-24 animate-pulse rounded-lg bg-slate-200/70" />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="my-auto flex w-full max-w-xl flex-col items-center px-6 py-12 text-center">
+                <Icon name="search" className="h-6 w-6 text-slate-500" />
+                <p className="mt-3 text-sm font-medium text-slate-700">
+                  {hasSearched ? 'Không tìm thấy keyframe' : 'Nhập mô tả sự kiện để tìm keyframe'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {hasSearched
+                    ? 'Thử mô tả khác, hoặc bỏ bớt bộ lọc.'
+                    : 'Enter để tìm · / để quay lại ô tìm kiếm'}
+                </p>
+                {statusError && (
+                  <p className="mt-4 max-w-md text-xs text-red-700">
+                    Không kết nối được API: {statusError}
+                  </p>
+                )}
+                {health && !indexReady && !statusError && (
+                  <p className="mt-4 max-w-md text-xs text-amber-700">
+                    Index chưa sẵn sàng. Chạy import shard trước khi tìm.
                   </p>
                 )}
               </div>
+            )}
+          </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-slate-600">
-                {timelineSource ? (
-                  <span className="rounded border border-sky-300 bg-sky-50 px-2 py-1 text-sky-700">
-                    timeline
-                  </span>
-                ) : (
-                  <>
-                    <span className="rounded border border-slate-300 bg-white px-2 py-1">
-                      {selectedModel || 'default'}
-                    </span>
-                    <span className="rounded border border-slate-300 bg-white px-2 py-1">
-                      {dedup ? 'dedup' : 'no-dedup'}
-                    </span>
-                  </>
-                )}
+          <aside
+            aria-label="Kết quả tìm kiếm"
+            className="scroll-slim min-h-0 min-[1100px]:overflow-y-auto min-[1100px]:border-l min-[1100px]:border-slate-200 min-[1100px]:pl-3"
+          >
+            <div className="flex items-center justify-between gap-2 pb-2">
+              <div className="flex min-w-0 items-baseline gap-2">
+                <h2 className="truncate text-xs font-semibold text-slate-700">
+                  {resultsLabel}
+                </h2>
                 {elapsed !== null && (
-                  <span className="rounded border border-slate-300 bg-white px-2 py-1">
+                  <span className="shrink-0 font-mono text-[10px] text-slate-500 tabular-nums">
                     {elapsed} ms
                   </span>
                 )}
               </div>
+              <span className="hidden shrink-0 text-[10px] text-slate-500 sm:inline">
+                ↑↓ chọn
+              </span>
             </div>
 
-            {similarSource && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-                <div className="flex min-w-0 flex-1 items-center gap-3">
-                  <img
-                    src={similarSource.keyframe_url}
-                    alt=""
-                    className="h-10 w-16 shrink-0 rounded border border-amber-200 object-cover"
-                  />
-                  <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-amber-700">
-                      Similar search
-                    </p>
-                    <p className="truncate text-xs text-amber-900">
-                      Tương tự{' '}
-                      <span className="font-mono">{similarSource.video_id}</span> ·{' '}
-                      {formatMs(keyframeTime(similarSource))}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void runSimilar(similarSource)}
-                    disabled={loading}
-                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Chạy lại
-                  </button>
-                  <button
-                    type="button"
-                    onClick={backToResults}
-                    disabled={loading}
-                    className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/40 focus-visible:ring-offset-2 focus-visible:ring-offset-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    ← Quay lại
-                  </button>
-                </div>
+            {(similarSource || timelineSource) && (
+              <div className="mb-2 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5">
+                <img
+                  src={(similarSource ?? timelineSource)!.keyframe_url}
+                  alt=""
+                  className="h-8 w-14 shrink-0 rounded object-cover"
+                />
+                <p className="min-w-0 flex-1 truncate text-[11px] text-blue-900">
+                  <span className="font-medium">
+                    {similarSource ? 'Tương tự' : 'Lân cận'}
+                  </span>{' '}
+                  <span className="font-mono">
+                    {(similarSource ?? timelineSource)!.video_id}
+                  </span>{' '}
+                  · {formatMs(keyframeTime((similarSource ?? timelineSource)!))}
+                </p>
+                <button
+                  type="button"
+                  onClick={backToResults}
+                  disabled={loading}
+                  className="shrink-0 rounded-md bg-white px-2 py-1 text-[11px] font-medium text-blue-800 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 disabled:opacity-50"
+                >
+                  ← Quay lại
+                </button>
               </div>
             )}
 
-            {timelineSource && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2">
-                <div className="flex min-w-0 flex-1 items-center gap-3">
-                  <img
-                    src={timelineSource.keyframe_url}
-                    alt=""
-                    className="h-10 w-16 shrink-0 rounded border border-sky-200 object-cover"
-                  />
-                  <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-sky-700">
-                      Timeline
-                    </p>
-                    <p className="truncate text-xs text-sky-900">
-                      Keyframe lân cận ·{' '}
-                      <span className="font-mono">{timelineSource.video_id}</span> ·{' '}
-                      {formatMs(keyframeTime(timelineSource))}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void runTimeline(timelineSource)}
-                    disabled={loading}
-                    className="rounded-md border border-sky-300 bg-white px-2.5 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Chạy lại
-                  </button>
-                  <button
-                    type="button"
-                    onClick={backToResults}
-                    disabled={loading}
-                    className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/40 focus-visible:ring-offset-2 focus-visible:ring-offset-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    ← Quay lại
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {loading ? (
-              <div className="result-grid" aria-busy="true">
-                {Array.from({ length: 8 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="overflow-hidden rounded-lg border border-slate-200 bg-white"
-                  >
-                    <div className="aspect-video animate-pulse bg-slate-200" />
-                    <div className="space-y-2 p-2.5">
-                      <div className="h-3 w-24 animate-pulse rounded bg-slate-200" />
-                      <div className="h-2.5 w-16 animate-pulse rounded bg-slate-100" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : results.length > 0 ? (
-              <div className="result-grid">
+            {results.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2.5 pb-8 md:grid-cols-3 min-[1100px]:grid-cols-2">
                 {results.map((hit) => (
                   <ResultCard
-                    key={`${hit.video_id}-${hit.shot_idx}-${hit.kf_uid ?? hit.start_ms}`}
+                    key={hitKey(hit)}
                     hit={hit}
                     selected={isHitSelected(hit)}
                     showScore={!timelineSource}
@@ -927,61 +960,61 @@ function App() {
                   />
                 ))}
               </div>
-            ) : (
-              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white/60 px-6 py-12 text-center">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 font-mono text-xs text-slate-400">
-                  K
-                </div>
-                <p className="mt-3 text-sm font-medium text-slate-700">
-                  {hasSearched ? 'Không có kết quả' : 'Chưa có truy vấn'}
-                </p>
+            ) : loading ? (
+              <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 min-[1100px]:grid-cols-2" aria-busy="true">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className="aspect-video animate-pulse rounded-xl bg-slate-200/70" />
+                ))}
               </div>
-            )}
-          </div>
-        </main>
-
-        <aside
-          aria-label="Preview và nộp bài"
-          className="scroll-slim border-t border-slate-200 bg-[#fbfaf7] xl:min-h-0 xl:overflow-y-auto xl:border-t-0 xl:border-l"
-        >
-          <div className="space-y-4 p-4 sm:p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Preview</p>
-                <h2 className="mt-1 truncate text-sm font-semibold text-slate-900">
-                  {selected ? selected.video_id : 'Chưa chọn keyframe'}
-                </h2>
-                {selected && (
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    shot {selected.shot_idx} · {formatMs(selected.start_ms)} →{' '}
-                    {formatMs(selected.end_ms)}
-                  </p>
+            ) : (
+              <div className="px-1 py-8 text-center">
+                <p className="text-xs text-slate-500">
+                  {hasSearched ? 'Không có kết quả.' : 'Kết quả sẽ hiện ở đây.'}
+                </p>
+                {hasSearched && (
+                  <button
+                    type="button"
+                    onClick={() => queryRef.current?.focus()}
+                    className="mt-2 text-[11px] font-medium text-blue-700 transition-colors hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60"
+                  >
+                    Thử mô tả khác
+                  </button>
                 )}
               </div>
-              {selected && activeFrame && (
-                <span className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[10px] text-slate-600">
-                  {formatMs(activeFrame.ts_ms)}
-                </span>
-              )}
-            </div>
-
-            {selected ? (
-              <div className="space-y-4">
-                <VideoPanel
-                  key={`${selected.video_id}-${selected.shot_idx}-${selected.start_ms}`}
-                  hit={selected}
-                  onActiveFrameChange={handleActiveFrame}
-                />
-                <DresPanel hit={selected} frame={activeFrame} />
-              </div>
-            ) : (
-              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white/60 px-6 py-12 text-center">
-                <p className="text-sm font-medium text-slate-700">Chưa chọn keyframe</p>
-              </div>
             )}
-          </div>
-        </aside>
+
+            {results.length > 0 && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none sticky bottom-0 -mt-8 h-8 bg-gradient-to-t from-[#f7f7f5] to-transparent"
+              />
+            )}
+          </aside>
+        </div>
       </div>
+
+      <SubmitBar ref={submitRef} hit={selected} frame={activeFrame} />
+
+      <FilterPopover
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        models={models}
+        selectedModel={selectedModel}
+        onModelChange={changeModel}
+        topK={topK}
+        onTopKChange={changeTopK}
+        includeBoilerplate={includeBoilerplate}
+        onBoilerplateChange={changeBoilerplate}
+        dedup={dedup}
+        onDedupChange={changeDedup}
+        objectFilters={objectFilters}
+        onRemoveObject={removeObject}
+        onOpenObjects={openObjectDrawer}
+        onReset={resetFilters}
+        isDefault={!filtersActive}
+      />
+
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       <ObjectFilterDrawer
         open={objectDrawerOpen}

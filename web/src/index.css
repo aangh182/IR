@@ -2,6 +2,10 @@
 
 :root {
   color-scheme: light;
+  --bg: #f7f7f5;
+  --ink: #0f172a;
+  --accent: #2563eb;
+  --commit: #047857;
 }
 
 html,
@@ -12,25 +16,30 @@ body,
 
 body {
   margin: 0;
-  background: #f5f3ee;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 0.75rem;
+::selection {
+  background: #bfdbfe;
+  color: #0f172a;
 }
 
-.panel-grid {
-  background-image:
-    linear-gradient(to right, rgb(15 23 42 / 0.035) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(15 23 42 / 0.035) 1px, transparent 1px);
-  background-size: 32px 32px;
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
 }
 
 .scroll-slim {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: #94a3b8 transparent;
+  scrollbar-gutter: stable;
 }
 
 .scroll-slim::-webkit-scrollbar {
@@ -39,7 +48,7 @@ body {
 }
 
 .scroll-slim::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #94a3b8;
   border-radius: 999px;
 }
 
@@ -50,7 +59,7 @@ body {
 @keyframes hover-zoom-in {
   from {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.97);
   }
   to {
     opacity: 1;
@@ -59,12 +68,12 @@ body {
 }
 
 .hover-zoom {
-  animation: hover-zoom-in 140ms ease-out;
+  animation: hover-zoom-in 120ms ease-out;
   transform-origin: center;
 }
 
 .lightbox-figure {
-  animation: hover-zoom-in 160ms ease-out;
+  animation: hover-zoom-in 140ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
