@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
+import type { ReactNode } from 'react'
 
 import { formatMs, parseTimestamp } from '../format'
 import type {
@@ -20,6 +21,8 @@ export type SubmitHandle = {
 type Props = {
   hit: Hit | null
   frame: FrameOption | null
+  onEvaluationChange?: () => void
+  queryControl?: ReactNode
 }
 
 const KINDS: { id: DresSubmitKind; label: string }[] = [
@@ -116,7 +119,7 @@ function buildAnswers(input: {
 }
 
 export const SubmitBar = forwardRef<SubmitHandle, Props>(function SubmitBar(
-  { hit, frame },
+  { hit, frame, onEvaluationChange, queryControl },
   ref,
 ) {
   const [status, setStatus] = useState<DresStatus | null>(null)
@@ -273,6 +276,7 @@ export const SubmitBar = forwardRef<SubmitHandle, Props>(function SubmitBar(
     try {
       await chooseEvaluation(evaluationId)
       setReloadKey((value) => value + 1)
+      onEvaluationChange?.()
     } catch (err) {
       setChoiceError(err instanceof Error ? err.message : 'Lỗi không xác định')
     } finally {
@@ -485,6 +489,8 @@ export const SubmitBar = forwardRef<SubmitHandle, Props>(function SubmitBar(
             className="h-9 w-44 min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 font-mono text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-500 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/15"
           />
         )}
+
+        {queryControl}
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {(status?.evaluations?.length ?? 0) > 1 && (

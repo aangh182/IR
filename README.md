@@ -432,6 +432,8 @@ cổng `5173` và `8000` ở tab **PORTS**.
 
 1. Gõ mô tả **tiếng Việt** (hoặc tiếng Anh) vào ô tìm kiếm (hoặc bấm một ví dụ) → `Tìm`;
    query được dịch sang tiếng Anh bằng Gemini trước khi search.
+   Nút **Query đề thi** ở thanh dưới hiển thị query/task hiện tại của DRES; bấm mở popup
+   đầy đủ, **Dùng query** điền và tìm, **Copy** copy. Đổi đề/task thì query tự cập nhật.
 2. Grid kết quả hiện keyframe kèm score; bấm một card để chọn.
 3. Panel phải: player tự seek tới frame, dải thumbnail bên dưới cho chọn keyframe
    hoặc follow frame đúng nhất.
@@ -478,6 +480,7 @@ uv run ir dres-submit video_0108 18500 --dry-run    # chỉ in payload, không n
 API tương ứng:
 
 - `GET /api/dres/status` — user + evaluation + task hiện tại.
+- `GET /api/dres/query` — query/hint hiện tại của task DRES (các đoạn text, task/evaluation, thời gian còn lại).
 - `POST /api/dres/submit` — body `{kind, video_id, ts_ms, answer, frame_ids, payload}`.
 
 Cấu hình trong `config.yaml`:
@@ -542,7 +545,7 @@ cd web && npm run dev
 - `GET /api/frames/{path}` — ảnh follow frame.
 - `GET /api/videos/{id}/stream` — video gốc, hỗ trợ HTTP Range.
 - Web UI: grid keyframe, click → player seek, dải thumbnail chọn frame đúng nhất, copy DRES payload theo frame được chọn.
-- DRES: `GET /api/dres/status`, `POST /api/dres/submit` — xem [Chạy web UI](#chạy-web-ui).
+- DRES: `GET /api/dres/status`, `GET /api/dres/query`, `POST /api/dres/submit` — xem [Chạy web UI](#chạy-web-ui).
 
 Query tiếng Việt được dịch sang tiếng Anh bằng Gemini trước khi encode CLIP. Cấu hình trong
 `config.yaml`:

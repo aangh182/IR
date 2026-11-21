@@ -19,6 +19,7 @@ __all__ = [
     "EvaluationSelection",
     "SubmitOutcome",
     "TaskInfo",
+    "TaskQuery",
     "answer_kind_for_group",
     "dres_evaluation_id",
     "dres_session",
@@ -117,6 +118,21 @@ class SubmitOutcome:
     @property
     def is_review(self) -> bool:
         return self.verdict in {"INDETERMINATE", "UNDECIDABLE"}
+
+
+@dataclass(frozen=True)
+class TaskQuery:
+    evaluation_id: str
+    task_id: str | None
+    task_template_id: str | None
+    task_name: str
+    task_group: str
+    task_type: str
+    task_status: str
+    time_left: int | None
+    query: str
+    segments: list[str]
+    has_image: bool
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts"}
@@ -313,6 +329,68 @@ class DresClient:
             task_group=str(payload.get("taskGroup", "")),
             task_type=str(payload.get("taskType", "")),
             duration=payload.get("duration"),
+        )
+
+    def current_query(self, evaluation_id: str | None = None) -> TaskQuery:
+        target = evaluation_id or self.evaluation_id
+        if not target:
+            target = self.active_evaluation().id
+
+        task = self.current_task(target)
+        state = self._request("GET", f"/api/v2/evaluation/{target}/state") or {}
+        if not isinstance(state, dict):
+            state = {}
+        template_id = state.get("taskTemplateId")
+        time_left = state.get("timeLeft")
+        if not isinstance(time_left, (int, float)):
+            time_left = None
+
+        if not template_id:
+            return TaskQuery(
+                evaluation_id=target,
+                task_id=str(state["taskId"]) if state.get("taskId") else None,
+                task_template_id=None,
+                task_name=task.name if task else "",
+                task_group=task.task_group if task else "",
+                task_type=task.task_type if task else "",
+                task_status=str(state.get("taskStatus") or ""),
+                time_left=time_left,
+                query="",
+                segments=[],
+                has_image=False,
+            )
+
+        hint = self._request(
+            "GET",
+            f"/api/v2/evaluation/{target}/template/task/{template_id}/hint",
+        ) or {}
+        if not isinstance(hint, dict):
+            hint = {}
+
+        segments: list[str] = []
+        has_image = False
+        for item in hint.get("sequence") or []:
+            if not isinstance(item, dict):
+                continue
+            content_type = str(item.get("contentType") or "").upper()
+            content = item.get("content")
+            if content_type == "TEXT" and isinstance(content, str) and content.strip():
+                segments.append(content.strip())
+            elif content_type in {"IMAGE", "VIDEO"}:
+                has_image = True
+
+        return TaskQuery(
+            evaluation_id=target,
+            task_id=str(state["taskId"]) if state.get("taskId") else None,
+            task_template_id=str(template_id),
+            task_name=task.name if task else "",
+            task_group=task.task_group if task else "",
+            task_type=task.task_type if task else "",
+            task_status=str(state.get("taskStatus") or ""),
+            time_left=time_left,
+            query=" ".join(segments),
+            segments=segments,
+            has_image=has_image,
         )
 
     def submit(

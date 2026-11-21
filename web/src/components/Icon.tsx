@@ -18,6 +18,7 @@ export type IconName =
   | 'alert'
   | 'tag'
   | 'more'
+  | 'document'
 
 const paths: Record<IconName, ReactNode> = {
   search: (
@@ -98,6 +99,13 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
       <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
       <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    </>
+  ),
+  document: (
+    <>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6M9 17h6" />
     </>
   ),
 }

@@ -103,6 +103,23 @@ export type DresStatus = {
   error?: string
 }
 
+export type DresQuery = {
+  configured: boolean
+  evaluation_name?: string | null
+  evaluation_id?: string
+  task_id?: string | null
+  task_template_id?: string | null
+  task_name?: string
+  task_group?: string
+  task_type?: string
+  task_status?: string
+  time_left?: number | null
+  query: string
+  segments: string[]
+  has_image: boolean
+  error?: string | null
+}
+
 export type DresSubmitKind = 'kis' | 'vkis' | 'qa' | 'trake' | 'raw'
 
 export type DresSubmitRequest = {

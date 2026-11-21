@@ -208,6 +208,52 @@ def dres_status(request: Request) -> dict[str, object]:
     }
 
 
+@router.get("/dres/query")
+def dres_query(request: Request) -> dict[str, object]:
+    cfg = _config(request)
+    if not dres_session(cfg):
+        return {
+            "configured": False,
+            "query": "",
+            "segments": [],
+            "has_image": False,
+            "error": None,
+        }
+
+    try:
+        client = DresClient.from_config(cfg)
+        selection = client.resolve_evaluation()
+        if selection.selected is None:
+            raise DresError("Chọn đề đang chạy trước khi lấy query.")
+        query = client.current_query(selection.selected.id)
+    except DresError as exc:
+        return {
+            "configured": True,
+            "evaluation_name": None,
+            "query": "",
+            "segments": [],
+            "has_image": False,
+            "error": str(exc),
+        }
+
+    return {
+        "configured": True,
+        "evaluation_name": selection.selected.name,
+        "evaluation_id": query.evaluation_id,
+        "task_id": query.task_id,
+        "task_template_id": query.task_template_id,
+        "task_name": query.task_name,
+        "task_group": query.task_group,
+        "task_type": query.task_type,
+        "task_status": query.task_status,
+        "time_left": query.time_left,
+        "query": query.query,
+        "segments": query.segments,
+        "has_image": query.has_image,
+        "error": None,
+    }
+
+
 @router.post("/dres/evaluation")
 def dres_evaluation(payload: DresEvaluationRequest, request: Request) -> dict[str, object]:
     cfg = _config(request)

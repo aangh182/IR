@@ -27,6 +27,7 @@ One operator on a laptop in a timed round. They type a Vietnamese event descript
 - Space toggles the video at the active frame.
 - `[` / `]` step the filmstrip; `S` submits; `C` copies the payload.
 - The full-video keyframe strip below the follow frames supports ←/→ stepping and mouse-wheel horizontal scrolling.
+- The bottom **Query đề thi** dock shows the live DRES task hint; click it for the full popup, **Dùng query** to fill and run the search, **Copy** for the clipboard. It follows the selected evaluation/task.
 - Filters and advanced DRES kinds recede behind one button.
 
 ## Proof and content

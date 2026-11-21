@@ -196,6 +196,9 @@ A pinned 60px surface with a green commit. The video ID and timestamp are inline
 ### Video Lookup Row
 A compact one-line row at the top of the results rail: video icon, **Mã video** label, a monospaced input accepting `12 016` or `L12_V016`, a live `→ L12_V016` resolution hint, and a small blue **Tìm** button. Enter or the button loads every keyframe of that video into the rail and stage. The description search stays in the command bar, separate from this lookup.
 
+### Query Dock
+A compact trigger in the submit bar: document icon, **Query đề thi**, the evaluation/task/time summary, and **Mở**. Clicking opens a centered modal with the full DRES task hint text, **Dùng query** (fills the description field and runs the search), **Copy**, and a close button. The dock refreshes every 15 seconds and immediately when the evaluation changes; the modal shows the full text without clipping.
+
 ### Filters and Dialogs
 One popover holds the model, result count, object tags, intro/logo toggle, and near-duplicate toggle. Object tags open a full-height drawer; shortcuts open a small centered dialog; the frame expands into a lightbox. All use standard web controls.
 

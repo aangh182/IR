@@ -34,6 +34,7 @@ The interface treats the retrieved frame as the primary object, not the result m
 - The full-video keyframe strip below the follow-frame strip supports ←/→ stepping and mouse-wheel horizontal scrolling.
 - Video streams are requested only when the operator presses play; keyframe and follow-frame images are the default browsing surface.
 - API startup warm-loads every available embedding profile (`embed.warmup_all`), so switching CLIP ↔ SigLIP2 does not pay a model-load cost.
+- The submit bar has a compact **Query đề thi** dock showing the live DRES task hint/query; clicking opens a full modal with Dùng query (fill and search) and Copy. It follows the selected evaluation and task.
 - Supported submission kinds in the API: KIS, Q&A, TRAKE, raw JSON. The redesign's primary flow is text KIS; other kinds remain reachable but secondary.
 - No VKIS image upload/drawing search endpoint exists.
 - Stack is fixed: Vite + React 19 + TypeScript + Tailwind CSS 4 in `web/`.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { FilterPopover } from './components/FilterPopover'
+import { ExamQueryDock } from './components/ExamQueryDock'
 import { Icon } from './components/Icon'
 import { MediaStage } from './components/MediaStage'
 import type { MediaStageHandle } from './components/MediaStage'
@@ -124,6 +125,7 @@ function App() {
   const [dedup, setDedup] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [dresRevision, setDresRevision] = useState(0)
 
   const [results, setResults] = useState<Hit[]>([])
   const [selected, setSelected] = useState<Hit | null>(null)
@@ -480,6 +482,14 @@ function App() {
     void runVideoSearch(normalized)
   }
 
+  function useExamQuery(text: string) {
+    if (!text.trim()) return
+    setQuery(text)
+    setError(null)
+    if (filtersOpen) setFiltersOpen(false)
+    void runSearch(text)
+  }
+
   function runCurrent(options: RunOptions = {}) {
     if (loading) return
     if (similarSource) {
@@ -604,6 +614,7 @@ function App() {
   }
 
   const closeObjectDrawer = useCallback(() => setObjectDrawerOpen(false), [])
+  const handleDresRevision = useCallback(() => setDresRevision((value) => value + 1), [])
 
   function moveSelection(delta: number) {
     if (results.length === 0) return
@@ -1111,7 +1122,15 @@ function App() {
         </div>
       </div>
 
-      <SubmitBar ref={submitRef} hit={selected} frame={activeFrame} />
+      <SubmitBar
+        ref={submitRef}
+        hit={selected}
+        frame={activeFrame}
+        onEvaluationChange={handleDresRevision}
+        queryControl={
+          <ExamQueryDock onUseQuery={useExamQuery} refreshKey={dresRevision} />
+        }
+      />
 
       <FilterPopover
         open={filtersOpen}
