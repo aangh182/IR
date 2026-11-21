@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 
 import { formatMs } from '../format'
 import type { FrameOption, Hit } from '../types'
@@ -28,12 +28,16 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const playOnReadyRef = useRef(false)
   const [lightbox, setLightbox] = useState(false)
   const [videoError, setVideoError] = useState(false)
   const [videoReady, setVideoReady] = useState(false)
   const [playing, setPlaying] = useState(false)
+  const [armedVideoId, setArmedVideoId] = useState<string | null>(null)
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
+
+  const videoArmed = armedVideoId === hit.video_id
 
   const keyframe = frames.find((frame) => frame.is_keyframe)
   const active = frames[Math.min(activeIndex, frames.length - 1)] ?? frames[0]
@@ -46,21 +50,38 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
       (hit.evidence.object_counts[left] ?? 0),
   )
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      togglePlay() {
-        const video = videoRef.current
-        if (!video) return
-        if (video.paused) {
-          void video.play().catch(() => setPlaying(false))
-        } else {
-          video.pause()
-        }
-      },
-    }),
-    [],
-  )
+  function requestPlay() {
+    if (!videoArmed) {
+      playOnReadyRef.current = true
+      setArmedVideoId(hit.video_id)
+      return
+    }
+    const video = videoRef.current
+    if (!video) {
+      playOnReadyRef.current = true
+      return
+    }
+    if (video.paused) {
+      playOnReadyRef.current = true
+      void video.play().catch(() => setPlaying(false))
+    } else {
+      video.pause()
+    }
+  }
+
+  useImperativeHandle(ref, () => ({ togglePlay: requestPlay }))
+
+  const seekToActive = useCallback((video: HTMLVideoElement) => {
+    const target = active.ts_ms / 1000
+    try {
+      const limit = Number.isFinite(video.duration)
+        ? Math.max(0, video.duration - 0.05)
+        : target
+      video.currentTime = Math.min(target, limit)
+    } catch {
+      // Metadata is not ready; loadedmetadata retries.
+    }
+  }, [active.ts_ms])
 
   useEffect(() => {
     setVideoError(false)
@@ -68,6 +89,8 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
     setPlaying(false)
     setDuration(0)
     setCurrentTime(0)
+    setArmedVideoId(null)
+    playOnReadyRef.current = false
   }, [hit.video_id])
 
   useEffect(() => {
@@ -81,21 +104,11 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    const seek = () => {
-      const target = active.ts_ms / 1000
-      try {
-        const limit = Number.isFinite(video.duration)
-          ? Math.max(0, video.duration - 0.05)
-          : target
-        video.currentTime = Math.min(target, limit)
-      } catch {
-        // Metadata is not ready; the loadedmetadata listener retries.
-      }
-    }
+    const seek = () => seekToActive(video)
     if (video.readyState >= 1) seek()
     else video.addEventListener('loadedmetadata', seek, { once: true })
     return () => video.removeEventListener('loadedmetadata', seek)
-  }, [hit.video_id, active.ts_ms])
+  }, [hit.video_id, active.ts_ms, seekToActive])
 
   useEffect(() => {
     const target = document.querySelector(`[data-frame-index="${activeIndex}"]`)
@@ -147,12 +160,7 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={() => {
-              const video = videoRef.current
-              if (!video) return
-              if (video.paused) void video.play().catch(() => setPlaying(false))
-              else video.pause()
-            }}
+            onClick={requestPlay}
             aria-label={playing ? 'Tạm dừng video' : 'Phát video'}
             title={`${playing ? 'Tạm dừng' : 'Phát'} video (Space)`}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60"
@@ -190,7 +198,7 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
       </div>
 
       <div
-        className="relative aspect-video max-h-[calc(100dvh-21rem)] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950"
+        className="relative aspect-video max-h-[calc(100dvh-26rem)] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950"
         onDoubleClick={() => setLightbox(true)}
       >
         <img
@@ -200,7 +208,7 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
           draggable={false}
         />
 
-        {!videoError && (
+        {videoArmed && !videoError && (
           <video
             key={hit.video_id}
             ref={videoRef}
@@ -212,7 +220,15 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
             playsInline
             preload="metadata"
             aria-label={`Video ${hit.video_id} tại ${formatMs(active.ts_ms)}`}
-            onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+            onLoadedMetadata={(event) => {
+              const video = event.currentTarget
+              setDuration(video.duration || 0)
+              seekToActive(video)
+              if (playOnReadyRef.current) {
+                playOnReadyRef.current = false
+                void video.play().catch(() => setPlaying(false))
+              }
+            }}
             onLoadedData={() => setVideoReady(true)}
             onSeeked={() => setVideoReady(true)}
             onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
@@ -227,25 +243,32 @@ export const MediaStage = forwardRef<MediaStageHandle, Props>(function MediaStag
         )}
       </div>
 
-      <div className="mt-2 flex items-center gap-2">
-        <span className="w-14 shrink-0 font-mono text-[10px] text-slate-500 tabular-nums">
-          {formatMs(Math.round(currentTime * 1000))}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.05}
-          value={Math.min(currentTime, duration || 0)}
-          onChange={(event) => seekTo(Number(event.target.value))}
-          disabled={!duration}
-          aria-label="Tua video"
-          className="h-1 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-blue-600 disabled:cursor-default"
-        />
-        <span className="w-14 shrink-0 text-right font-mono text-[10px] text-slate-500 tabular-nums">
-          {duration ? formatMs(Math.round(duration * 1000)) : '--:--'}
-        </span>
-      </div>
+      {!videoArmed ? (
+        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+          <span>Video tải khi phát · Space</span>
+          <span className="font-mono tabular-nums">{formatMs(active.ts_ms)}</span>
+        </div>
+      ) : (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="w-14 shrink-0 font-mono text-[10px] text-slate-500 tabular-nums">
+            {formatMs(Math.round(currentTime * 1000))}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.05}
+            value={Math.min(currentTime, duration || 0)}
+            onChange={(event) => seekTo(Number(event.target.value))}
+            disabled={!duration}
+            aria-label="Tua video"
+            className="h-1 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-blue-600 disabled:cursor-default"
+          />
+          <span className="w-14 shrink-0 text-right font-mono text-[10px] text-slate-500 tabular-nums">
+            {duration ? formatMs(Math.round(duration * 1000)) : '--:--'}
+          </span>
+        </div>
+      )}
 
       <div className="mt-2 space-y-1.5">
         <div className="flex items-center justify-between text-[10px] text-slate-500">

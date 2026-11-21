@@ -29,7 +29,11 @@ The interface treats the retrieved frame as the primary object, not the result m
 
 ## Capabilities and Constraints
 
-- Existing API: `POST /api/search`, `/api/similar`, `/api/timeline`, `GET /api/dres/status`, `POST /api/dres/submit`, keyframe/follow-frame/video-stream endpoints.
+- Existing API: `POST /api/search`, `/api/similar`, `/api/timeline`, `GET /api/videos/{video_id}/keyframes`, `GET /api/dres/status`, `POST /api/dres/submit`, keyframe/follow-frame/video-stream endpoints.
+- Video lookup lives in the results rail's **Mã video** field, not the description search: a full ID or a two-part shorthand (`12 016` → `L12_V016`) followed by Enter loads every keyframe of that video.
+- The full-video keyframe strip below the follow-frame strip supports ←/→ stepping and mouse-wheel horizontal scrolling.
+- Video streams are requested only when the operator presses play; keyframe and follow-frame images are the default browsing surface.
+- API startup warm-loads every available embedding profile (`embed.warmup_all`), so switching CLIP ↔ SigLIP2 does not pay a model-load cost.
 - Supported submission kinds in the API: KIS, Q&A, TRAKE, raw JSON. The redesign's primary flow is text KIS; other kinds remain reachable but secondary.
 - No VKIS image upload/drawing search endpoint exists.
 - Stack is fixed: Vite + React 19 + TypeScript + Tailwind CSS 4 in `web/`.

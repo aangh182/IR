@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-21T05:45:00Z",
+  "title": "Design System: AIC2024 KIS",
+  "extensions": {
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Working Canvas", "canonical": "#f7f7f5" },
+      "surface": { "role": "neutral", "displayName": "Panel Surface", "canonical": "#ffffff" },
+      "ink": { "role": "neutral", "displayName": "Charcoal Ink", "canonical": "#0f172a" },
+      "ink-soft": { "role": "neutral", "displayName": "Soft Ink", "canonical": "#475569" },
+      "ink-muted": { "role": "neutral", "displayName": "Muted Ink", "canonical": "#64748b" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#e2e8f0" },
+      "action": { "role": "primary", "displayName": "Action Blue", "canonical": "#2563eb" },
+      "action-deep": { "role": "primary", "displayName": "Action Blue Deep", "canonical": "#1d4ed8" },
+      "commit": { "role": "secondary", "displayName": "Commit Emerald", "canonical": "#047857" },
+      "commit-deep": { "role": "secondary", "displayName": "Commit Emerald Deep", "canonical": "#065f46" },
+      "warning": { "role": "neutral", "displayName": "Warning Amber", "canonical": "#b45309" },
+      "danger": { "role": "neutral", "displayName": "Danger Red", "canonical": "#b91c1c" },
+      "media": { "role": "neutral", "displayName": "Media Black", "canonical": "#020617" }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Selected video ID and panel headings." },
+      "body": { "displayName": "Body", "purpose": "Search, labels, and explanatory copy." },
+      "label": { "displayName": "Label", "purpose": "Counts, state hints, and control labels." },
+      "data": { "displayName": "Data", "purpose": "Video IDs, timestamps, scores, and shortcut keys." }
+    },
+    "shadows": [
+      { "name": "popover", "value": "0 16px 40px -16px rgba(15,23,42,0.35)", "purpose": "Filter panel floating above the workspace." },
+      { "name": "dialog", "value": "0 24px 64px -24px rgba(15,23,42,0.5)", "purpose": "Shortcuts dialog and object drawer." }
+    ],
+    "motion": [
+      { "name": "media-fade", "value": "150ms ease-out", "purpose": "A loaded video frame fades in over its keyframe placeholder." },
+      { "name": "lightbox-in", "value": "140ms ease-out", "purpose": "The expanded frame arrives from a slightly reduced scale." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "laptop", "value": "1100px" },
+      { "name": "xl", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Search Button",
+      "kind": "button",
+      "refersTo": "button-action",
+      "description": "The one blue action; runs the description search.",
+      "html": "<button class=\"ds-btn-action\">Tìm</button>",
+      "css": ".ds-btn-action { height: 40px; padding: 0 16px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: 600 14px system-ui, -apple-system, 'Segoe UI', sans-serif; cursor: pointer; transition: background .15s ease; } .ds-btn-action:hover { background: #1d4ed8; } .ds-btn-action:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; } .ds-btn-action:disabled { background: #cbd5e1; color: #f8fafc; cursor: wait; }"
+    },
+    {
+      "name": "Commit Button",
+      "kind": "button",
+      "refersTo": "button-commit",
+      "description": "The one green action; submits the selected frame to DRES.",
+      "html": "<button class=\"ds-btn-commit\">Nộp bài <kbd>S</kbd></button>",
+      "css": ".ds-btn-commit { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 8px; background: #047857; color: #fff; font: 600 14px system-ui, -apple-system, 'Segoe UI', sans-serif; cursor: pointer; transition: background .15s ease; } .ds-btn-commit:hover { background: #065f46; } .ds-btn-commit:disabled { background: #e2e8f0; color: #475569; cursor: not-allowed; } .ds-btn-commit kbd { border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 0 4px; font: 400 10px ui-monospace, monospace; color: rgba(255,255,255,.8); }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "One description field in the command bar; Enter runs the query.",
+      "html": "<input class=\"ds-input\" placeholder=\"Mô tả sự kiện...\" aria-label=\"Mô tả sự kiện\" />",
+      "css": ".ds-input { width: 100%; height: 40px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; color: #0f172a; font: 400 14px system-ui, -apple-system, 'Segoe UI', sans-serif; outline: none; transition: border-color .15s ease, box-shadow .15s ease; } .ds-input::placeholder { color: #64748b; } .ds-input:hover { border-color: #cbd5e1; } .ds-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.15); }"
+    },
+    {
+      "name": "Selected Result Tile",
+      "kind": "card",
+      "refersTo": "result-tile",
+      "description": "The selected keyframe tile; the selection must be unmistakable at a glance.",
+      "html": "<button class=\"ds-tile ds-tile-selected\"><span class=\"ds-thumb\"></span><span class=\"ds-meta\">L12_V023 · 01:18.680</span><span class=\"ds-check\"><svg viewBox=\"0 0 24 24\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m5 12.5 4.2 4.2L19 6.5\"/></svg></span></button>",
+      "css": ".ds-tile { position: relative; display: block; width: 100%; aspect-ratio: 16/9; padding: 0; overflow: hidden; border: 2px solid #e2e8f0; border-radius: 12px; background: #fff; cursor: pointer; } .ds-thumb { position: absolute; inset: 0; background: #cbd5e1; } .ds-meta { position: absolute; left: 6px; bottom: 6px; max-width: calc(100% - 3rem); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 2px 6px; border-radius: 4px; background: #0f172a; color: #fff; font: 500 10px ui-monospace, monospace; } .ds-tile-selected { border-color: #2563eb; box-shadow: 0 0 0 2px #f7f7f5, 0 0 0 4px rgba(37,99,235,.5); } .ds-tile-selected .ds-thumb { background: #93c5fd; } .ds-tile-selected .ds-meta { background: #2563eb; font-weight: 600; } .ds-check { position: absolute; right: 6px; bottom: 6px; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #2563eb; color: #fff; }"
+    },
+    {
+      "name": "Submit Bar",
+      "kind": "custom",
+      "refersTo": "submit-bar",
+      "description": "Pinned footer with inline video ID, timestamp, and the green commit.",
+      "html": "<div class=\"ds-submit\"><div class=\"ds-submit-main\"><span class=\"ds-video\">L12_V016</span><span class=\"ds-at\">@</span><span class=\"ds-time\">00:06.040</span><span class=\"ds-status\">team06 · Đề thi 2 · TKIS</span></div><button class=\"ds-submit-btn\">Nộp bài <kbd>S</kbd></button></div>",
+      "css": ".ds-submit { display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-top: 1px solid #e2e8f0; background: #fff; } .ds-submit-main { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; } .ds-video, .ds-time { font: 600 14px ui-monospace, monospace; color: #0f172a; } .ds-at { color: #64748b; } .ds-status { width: 100%; font: 400 10px system-ui, sans-serif; color: #64748b; } .ds-submit-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; margin-left: auto; border: 0; border-radius: 8px; background: #047857; color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; } .ds-submit-btn:hover { background: #065f46; } .ds-submit-btn:focus-visible { outline: 2px solid #047857; outline-offset: 2px; } .ds-submit-btn kbd { border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 0 4px; font: 400 10px ui-monospace, monospace; color: rgba(255,255,255,.8); }"
+    },
+    {
+      "name": "Full-Video Keyframe Strip",
+      "kind": "custom",
+      "refersTo": "keyframe-strip-tile",
+      "description": "Every keyframe of the selected video; arrow keys step, wheel scrolls horizontally.",
+      "html": "<div class=\"ds-strip\"><button class=\"ds-strip-tile ds-strip-active\"><span class=\"ds-strip-thumb\"></span><span class=\"ds-strip-time\">00:06.040</span><span class=\"ds-strip-check\"><svg viewBox=\"0 0 24 24\" width=\"10\" height=\"10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m5 12.5 4.2 4.2L19 6.5\"/></svg></span></button><button class=\"ds-strip-tile\"><span class=\"ds-strip-thumb\"></span><span class=\"ds-strip-time\">00:12.920</span></button><button class=\"ds-strip-tile\"><span class=\"ds-strip-thumb\"></span><span class=\"ds-strip-time\">00:14.480</span></button></div>",
+      "css": ".ds-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; } .ds-strip-tile { position: relative; flex: 0 0 80px; width: 80px; aspect-ratio: 16/9; padding: 0; overflow: hidden; border: 2px solid #e2e8f0; border-radius: 6px; background: #fff; cursor: pointer; } .ds-strip-thumb { position: absolute; inset: 0; background: #cbd5e1; } .ds-strip-time { position: absolute; inset-inline: 0; bottom: 0; padding: 2px 0; background: rgba(2,6,23,.8); color: #fff; text-align: center; font: 500 9px ui-monospace, monospace; } .ds-strip-active { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.4); } .ds-strip-active .ds-strip-thumb { background: #93c5fd; } .ds-strip-active .ds-strip-time { background: #2563eb; font-weight: 600; } .ds-strip-check { position: absolute; right: 4px; top: 4px; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #2563eb; color: #fff; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Calm Cutting Bench",
+    "overview": "The operator is working against a clock, so the interface behaves like a clean cutting bench: the frame is the object, the chrome is thin and quiet, and the next action is always one key away. The screen is near-white and charcoal, with exactly two accents doing real jobs: blue for action and selection, green for commit and correct. Everything else is a hairline. This is deliberately the standard search console, chosen by the operator over a distinctive visual world. Its character comes from precision, scale, and restraint rather than ornament. The keyframe is always unobstructed; no hover preview, gradient scrim, or overlay chip covers the image.",
+    "keyCharacteristics": [
+      "Near-white canvas, charcoal ink, 1px hairlines, 12px media corners.",
+      "One large stage and a 2-up keyframe wall; the images are the only saturated color.",
+      "Keyboard spine: /, Enter, arrows, Space, [ ], S, C, R, T, F, ?.",
+      "A pinned submit bar with an inline video ID and timestamp, plus video-ID lookup.",
+      "Flat surfaces; only popovers and dialogs lift."
+    ],
+    "rules": [
+      { "name": "The Two Accents Rule", "body": "Blue means action or selection; green means commit or correct. Neither is decorative, and green never becomes a status dot.", "section": "colors" },
+      { "name": "The Frame Carries Color Rule", "body": "Keyframe images are the only saturated field on a working screen. Chrome stays neutral so the frame wins.", "section": "colors" },
+      { "name": "The Unobstructed Frame Rule", "body": "No hover preview, gradient scrim, or overlay chip covers a frame. Metadata belongs in the toolbar or below the media.", "section": "colors" },
+      { "name": "The Data Is Monospaced Rule", "body": "IDs, timestamps, scores, and keycaps use the mono stack with tabular numerals; prose never does.", "section": "typography" },
+      { "name": "The Flat Until It Floats Rule", "body": "Cards and regions are flat at rest; only popovers and dialogs carry a shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the frame unobstructed; put metadata in the toolbar or below the media.",
+      "Do use blue for action/selection and green only for commit/correct.",
+      "Do make the selected tile unmistakable with a border, ring, blue chips, and a check.",
+      "Do keep the keyboard spine and the video-ID Enter lookup.",
+      "Do keep the full-video strip below the follow frames, with arrow stepping and wheel scrolling.",
+      "Do use mono and tabular numerals for IDs, timestamps, scores, and keys."
+    ],
+    "donts": [
+      "Don't add hover-to-zoom or floating previews over images.",
+      "Don't overlay gradient scrims or chips on frames.",
+      "Don't reintroduce a filter sidebar or a visual-world costume.",
+      "Don't show retrieval scores in video-lookup mode.",
+      "Don't use green or blue decoratively.",
+      "Don't signal selection with a 1px border alone."
+    ]
+  }
+}

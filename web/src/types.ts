@@ -6,6 +6,7 @@ export type Health = {
   index_ready: boolean
   index_count: number | null
   index_model: string | null
+  loaded_models?: string[]
 }
 
 export type Stats = {

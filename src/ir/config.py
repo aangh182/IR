@@ -64,6 +64,7 @@ class EmbedConfig(BaseModel):
     batch_size: int = 128
     fp16: bool = True
     default: str = "clip"
+    warmup_all: bool = True
     profiles: list[EmbedProfile] = Field(default_factory=list)
 
 

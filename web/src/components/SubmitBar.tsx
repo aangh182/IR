@@ -9,6 +9,7 @@ import type {
   FrameOption,
   Hit,
 } from '../types'
+import { normalizeVideoShorthand } from '../video'
 import { Icon } from './Icon'
 
 export type SubmitHandle = {
@@ -156,12 +157,15 @@ export const SubmitBar = forwardRef<SubmitHandle, Props>(function SubmitBar(
     }
   }, [reloadKey])
 
+  const hitVideoId = hit?.video_id ?? null
+
   useEffect(() => {
+    if (!hitVideoId) return
     setVideoOverride(null)
     setTimeOverride(null)
     setResult(null)
     setSubmitError(null)
-  }, [hit?.video_id, frame?.ts_ms])
+  }, [hitVideoId, frame?.ts_ms])
 
   useEffect(() => {
     setAnswer('')
@@ -419,8 +423,19 @@ export const SubmitBar = forwardRef<SubmitHandle, Props>(function SubmitBar(
               <input
                 value={videoId}
                 onChange={(event) => setVideoOverride(event.target.value)}
+                onBlur={() => {
+                  const normalized = normalizeVideoShorthand(videoId)
+                  if (normalized) setVideoOverride(normalized)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  const normalized = normalizeVideoShorthand(videoId)
+                  if (normalized) setVideoOverride(normalized)
+                  event.currentTarget.blur()
+                }}
                 placeholder="video_id"
                 aria-label="Video ID"
+                title="Mã video nộp bài"
                 spellCheck={false}
                 className="w-32 rounded-md px-1.5 py-1 font-mono text-sm font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-500 hover:bg-slate-50 focus:bg-blue-50/60 focus:ring-2 focus:ring-blue-600/20"
               />

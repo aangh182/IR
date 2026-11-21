@@ -2,6 +2,60 @@
 
 Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (Video KIS) và Q&A cho vòng chung kết AIC2024.
 
+## Chạy nhanh (khuyến nghị khi thi)
+
+Chạy API và web trên cùng laptop, mở **một cổng duy nhất** `http://127.0.0.1:8000/`.
+FastAPI serve bản build `web/dist`; không cần Vite dev server, proxy hay SSH tunnel.
+
+### 1. Cài dependencies (một lần)
+
+```bash
+uv python install 3.11
+uv sync --group ml --group index --group serve
+uv run ir init
+
+cd web
+npm install
+npm run build
+cd ..
+```
+
+Nếu shell có `NODE_ENV=production`, npm sẽ bỏ qua devDependencies:
+`NODE_ENV=development npm install --include=dev`.
+
+### 2. Chạy API
+
+```bash
+uv run uvicorn ir.api.main:app --host 127.0.0.1 --port 8000
+```
+
+- API warm-load cả CLIP và SigLIP2 lúc khởi động (`embed.warmup_all: true`), nên lần
+  start đầu lâu hơn; bật API sớm trước giờ thi.
+- Nếu vừa `npm run build` sau khi API đã chạy, khởi động lại API một lần để mount
+  `web/dist`.
+
+### 3. Mở web
+
+Mở **http://127.0.0.1:8000/**.
+
+Không dùng `http://127.0.0.1:5173` khi thi: 5173 là Vite dev server và có thể giữ
+bundle cũ. Kiểm tra nhanh:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+# loaded_models phải có "clip" và "siglip2"
+```
+
+### Chạy dev (tuỳ chọn, cần HMR khi sửa UI)
+
+```bash
+uv run uvicorn ir.api.main:app --reload   # API :8000
+cd web && npm run dev                     # web :5173, proxy /api -> :8000
+```
+
+Mở `http://127.0.0.1:5173`. Sửa UI xong thì `npm run build` và dùng lại cổng 8000 cho
+lúc thi.
+
 ## Trạng thái
 
 - [x] Phase 0: nền tảng, config, SQLite schema, CLI, FastAPI, web scaffold
@@ -21,6 +75,8 @@ Hệ thống tìm kiếm video theo mô tả (Textual KIS), ảnh vẽ/upload (V
 - Node >= 20.19 cho web
 
 ## Cài đặt local (search/serve, CPU)
+
+> Khi thi, dùng **Chạy nhanh** ở đầu README (production, cổng 8000). Mục này là dev flow.
 
 ```bash
 uv python install 3.11
@@ -158,6 +214,11 @@ uv run ir search "a person at a desk"                                # dùng emb
 
 Web có dropdown `Model` (dữ liệu từ `GET /api/models`); `POST /api/search` nhận thêm
 `{"model": "siglip2"}`. Model không có index sẽ hiện `chưa có index` và bị disable.
+
+API warm-load **tất cả** profile có index lúc khởi động khi `embed.warmup_all: true`
+(mặc định), nên đổi CLIP ↔ SigLIP2 không còn load model ở lần search đầu. Đặt
+`warmup_all: false` nếu máy thiếu RAM; khi đó chỉ profile `embed.default` được nạp sẵn.
+`GET /api/health` trả `loaded_models` để kiểm tra.
 
 ### Loại frame boilerplate (intro/logo lặp)
 
@@ -310,6 +371,9 @@ Chọn batch giống notebook embedding: `VINTERN_VIDEO_OFFSET` + `VINTERN_VIDEO
 
 ## Chạy web UI
 
+> Khi thi, dùng **Chạy nhanh** ở đầu README: `npm run build` rồi mở cổng 8000. Mục này
+> là dev flow (Vite 5173 + proxy `/api`).
+
 Web là Vite React, nằm trong `web/` và gọi API qua proxy `/api` → `http://127.0.0.1:8000`.
 
 ### 1. Bật API
@@ -348,6 +412,21 @@ ssh -L 5173:127.0.0.1:5173 -L 8000:127.0.0.1:8000 team06@<ip-máy-chạy>
 
 rồi mở `http://localhost:5173` trên máy local. Với VS Code Remote-SSH thì forward
 cổng `5173` và `8000` ở tab **PORTS**.
+
+### Hiệu năng khi thi (mạng yếu)
+
+- Chạy API và web trên **cùng laptop**, mở `http://127.0.0.1:8000/`: FastAPI tự serve
+  `web/dist` sau `npm run build`, không cần Vite dev server, proxy hay SSH tunnel.
+  Khởi động lại API một lần nếu `web/dist` chưa tồn tại lúc API khởi động.
+- API warm-load mọi embedding profile lúc khởi động (`embed.warmup_all: true`); đổi
+  CLIP ↔ SigLIP2 không còn load model lần đầu. Đặt `false` nếu thiếu RAM.
+- Keyframe/follow frame đã có `Cache-Control: max-age=3600`; stage chỉ tải video khi
+  bấm Space/phát, không prefetch video mỗi lần chọn frame.
+- Gemini dịch query là call mạng ngoài duy nhất (ngoài DRES), có cache 256 query.
+  Mạng yếu nên giảm `translate.timeout_sec` (ví dụ `4.0`) hoặc tắt `translate.enabled`
+  và nhập query tiếng Anh.
+- Video lookup tải toàn bộ keyframe của video; ảnh trong grid/strip đều lazy-load,
+  dùng strip để điều hướng các video dài.
 
 ### 4. Dùng UI
 

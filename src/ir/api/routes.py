@@ -92,6 +92,7 @@ def health(request: Request) -> dict[str, object]:
         "index_ready": any(bool(item["available"]) for item in models),
         "index_count": default["keyframes"] if default else None,
         "index_model": default["model"] if default else None,
+        "loaded_models": _service(request).loaded_models(),
     }
 
 
@@ -335,6 +336,14 @@ def follow_frame(path: str, request: Request) -> FileResponse:
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@router.get("/videos/{video_id}/keyframes", response_model=SearchResponse)
+def video_keyframes(video_id: str, request: Request) -> SearchResponse:
+    try:
+        return _service(request).video_keyframes(video_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/videos/{video_id}/stream")

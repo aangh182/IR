@@ -10,6 +10,7 @@ import { ResultCard } from './components/ResultCard'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { SubmitBar } from './components/SubmitBar'
 import type { SubmitHandle } from './components/SubmitBar'
+import { VideoKeyframeStrip } from './components/VideoKeyframeStrip'
 import { formatMs } from './format'
 import type {
   FrameOption,
@@ -21,6 +22,7 @@ import type {
   SearchResponse,
   Stats,
 } from './types'
+import { normalizeVideoShorthand } from './video'
 
 const EXAMPLES = [
   'người phát biểu tại hội nghị',
@@ -42,6 +44,7 @@ type ResultsSnapshot = {
   lastQuery: string
   translatedQuery: string
   source: Hit
+  videoSearchId: string | null
   filters: {
     includeBoilerplate: boolean
     dedup: boolean
@@ -133,6 +136,8 @@ function App() {
   const [translatedQuery, setTranslatedQuery] = useState('')
   const [similarSource, setSimilarSource] = useState<Hit | null>(null)
   const [timelineSource, setTimelineSource] = useState<Hit | null>(null)
+  const [videoSearchId, setVideoSearchId] = useState<string | null>(null)
+  const [videoQuery, setVideoQuery] = useState('')
   const [previousResults, setPreviousResults] = useState<ResultsSnapshot | null>(null)
 
   useEffect(() => {
@@ -199,6 +204,7 @@ function App() {
       )
     : 0
   const activeFrame = selected ? (selectedFrames[activeIndex] ?? null) : null
+  const resolvedVideoId = normalizeVideoShorthand(videoQuery)
 
   const modelChanged =
     Boolean(selectedModel) && selectedModel !== defaultModelName
@@ -223,7 +229,9 @@ function App() {
             ? 'frame tương tự'
             : timelineSource
               ? 'keyframe lân cận'
-              : 'keyframe'
+              : videoSearchId
+                ? `keyframe · ${videoSearchId}`
+                : 'keyframe'
         }`
       : 'Kết quả'
 
@@ -249,6 +257,8 @@ function App() {
     setHasSearched(true)
     setSimilarSource(null)
     setTimelineSource(null)
+    setVideoSearchId(null)
+    setVideoQuery('')
     setPreviousResults(null)
     setLastQuery(trimmed)
     setTranslatedQuery('')
@@ -306,6 +316,7 @@ function App() {
         lastQuery,
         translatedQuery,
         source: hit,
+        videoSearchId,
         filters: {
           includeBoilerplate,
           dedup,
@@ -321,6 +332,8 @@ function App() {
     setHasSearched(true)
     setTimelineSource(null)
     setSimilarSource(hit)
+    setVideoSearchId(null)
+    setVideoQuery('')
     setLastQuery('')
     setTranslatedQuery('')
 
@@ -370,6 +383,7 @@ function App() {
         lastQuery,
         translatedQuery,
         source: hit,
+        videoSearchId,
         filters: {
           includeBoilerplate,
           dedup,
@@ -385,6 +399,8 @@ function App() {
     setHasSearched(true)
     setSimilarSource(null)
     setTimelineSource(hit)
+    setVideoSearchId(null)
+    setVideoQuery('')
     setLastQuery('')
     setTranslatedQuery('')
 
@@ -417,6 +433,53 @@ function App() {
     }
   }
 
+  async function runVideoSearch(videoId: string) {
+    if (loading) return
+
+    setLoading(true)
+    setError(null)
+    setHasSearched(true)
+    setSimilarSource(null)
+    setTimelineSource(null)
+    setVideoSearchId(videoId)
+    setVideoQuery(videoId)
+    setPreviousResults(null)
+    setLastQuery(videoId)
+    setTranslatedQuery('')
+
+    try {
+      const response = await fetch(
+        `/api/videos/${encodeURIComponent(videoId)}/keyframes`,
+      )
+      if (!response.ok) throw new Error(await responseError(response))
+
+      const data = (await response.json()) as SearchResponse
+      setResults(data.results)
+      setSelected(data.results[0] ?? null)
+      setActiveFrameIndex(null)
+      setElapsed(data.elapsed_ms)
+      focusStage()
+    } catch (err) {
+      setResults([])
+      setSelected(null)
+      setActiveFrameIndex(null)
+      setElapsed(null)
+      setError(err instanceof Error ? err.message : 'Lỗi không xác định')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function submitVideoSearch() {
+    const normalized = normalizeVideoShorthand(videoQuery) ?? videoQuery.trim()
+    if (!normalized) {
+      setError('Nhập mã video trước khi tìm.')
+      return
+    }
+    setVideoQuery(normalized)
+    void runVideoSearch(normalized)
+  }
+
   function runCurrent(options: RunOptions = {}) {
     if (loading) return
     if (similarSource) {
@@ -427,17 +490,22 @@ function App() {
       void runTimeline(timelineSource)
       return
     }
+    if (videoSearchId) {
+      void runVideoSearch(videoSearchId)
+      return
+    }
     if (query.trim()) void runSearch(query, options)
   }
 
   function submitSearch() {
-    if (!query.trim()) {
+    const trimmed = query.trim()
+    if (!trimmed) {
       setError('Nhập mô tả sự kiện trước khi tìm.')
       queryRef.current?.focus()
       return
     }
     if (filtersOpen) setFiltersOpen(false)
-    void runSearch(query)
+    void runSearch(trimmed)
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -473,6 +541,8 @@ function App() {
     setElapsed(snapshot.elapsed)
     setLastQuery(snapshot.lastQuery)
     setTranslatedQuery(snapshot.translatedQuery)
+    setVideoSearchId(snapshot.videoSearchId)
+    setVideoQuery(snapshot.videoSearchId ?? '')
     setIncludeBoilerplate(snapshot.filters.includeBoilerplate)
     setDedup(snapshot.filters.dedup)
     setObjectFilters(snapshot.filters.objectFilters)
@@ -672,6 +742,9 @@ function App() {
     selectedModelInfo
       ? `${selectedModelInfo.name} · ${selectedModelInfo.dim}d`
       : null,
+    health?.loaded_models?.length
+      ? `${health.loaded_models.join(', ')} đã nạp`
+      : null,
     stats ? `${stats.videos.toLocaleString('vi-VN')} video · ${stats.keyframes.toLocaleString('vi-VN')} keyframe` : null,
     statusError,
   ]
@@ -679,7 +752,7 @@ function App() {
     .join(' · ')
 
   return (
-    <div className="min-h-dvh bg-[#f7f7f5] text-slate-900 min-[1100px]:flex min-[1100px]:h-dvh min-[1100px]:flex-col min-[1100px]:overflow-hidden">
+    <div className="min-h-dvh bg-[#f7f7f5] text-slate-900 laptop:flex laptop:h-dvh laptop:flex-col laptop:overflow-hidden">
       <header className="sticky top-0 z-30 shrink-0 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-[1800px] items-center gap-2 px-3 sm:gap-3 sm:px-5">
           <div className="flex shrink-0 items-center gap-2">
@@ -830,7 +903,7 @@ function App() {
         </div>
       )}
 
-      <div className="mx-auto flex w-full max-w-[1800px] flex-1 min-h-0 flex-col px-3 pb-40 pt-3 sm:px-5 min-[1100px]:pb-20">
+      <div className="mx-auto flex w-full max-w-[1800px] flex-1 min-h-0 flex-col px-3 pb-40 pt-3 sm:px-5 laptop:pb-20">
         {error && (
           <div
             role="alert"
@@ -848,22 +921,30 @@ function App() {
           </div>
         )}
 
-        <div className="grid min-h-0 grid-cols-1 gap-3 min-[1100px]:flex-1 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(420px,36%)]">
+        <div className="grid min-h-0 grid-cols-1 gap-3 laptop:flex-1 laptop:grid-cols-[minmax(0,1fr)_minmax(420px,36%)]">
           <div
             ref={stageRef}
             tabIndex={-1}
-            className="scroll-slim flex min-h-0 flex-col outline-none min-[1100px]:overflow-y-auto min-[1100px]:pr-1"
+            className="scroll-slim flex min-h-0 flex-col outline-none laptop:overflow-y-auto laptop:pr-1"
           >
             {selected ? (
-              <MediaStage
-                ref={mediaRef}
-                hit={selected}
-                frames={selectedFrames}
-                activeIndex={activeIndex}
-                onSelectFrame={setActiveFrameIndex}
-                onSimilar={() => handleSimilar(selected)}
-                onTimeline={() => handleTimeline(selected)}
-              />
+              <>
+                <MediaStage
+                  ref={mediaRef}
+                  hit={selected}
+                  frames={selectedFrames}
+                  activeIndex={activeIndex}
+                  onSelectFrame={setActiveFrameIndex}
+                  onSimilar={() => handleSimilar(selected)}
+                  onTimeline={() => handleTimeline(selected)}
+                />
+                <VideoKeyframeStrip
+                  key={selected.video_id}
+                  videoId={selected.video_id}
+                  activeKfUid={selected.kf_uid}
+                  onSelect={handleSelect}
+                />
+              </>
             ) : loading ? (
               <div className="my-auto space-y-2" aria-busy="true">
                 <div className="aspect-video w-full animate-pulse rounded-xl bg-slate-200/70" />
@@ -901,8 +982,45 @@ function App() {
 
           <aside
             aria-label="Kết quả tìm kiếm"
-            className="scroll-slim min-h-0 min-[1100px]:overflow-y-auto min-[1100px]:border-l min-[1100px]:border-slate-200 min-[1100px]:pl-3"
+            className="scroll-slim min-h-0 laptop:overflow-y-auto laptop:border-l laptop:border-slate-200 laptop:pl-3"
           >
+            <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white p-1.5">
+              <label
+                htmlFor="video-lookup"
+                className="flex shrink-0 items-center gap-1 pl-1 text-[11px] font-medium text-slate-600"
+              >
+                <Icon name="video" className="h-3.5 w-3.5 text-slate-500" />
+                Mã video
+              </label>
+              <input
+                id="video-lookup"
+                value={videoQuery}
+                onChange={(event) => setVideoQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  submitVideoSearch()
+                }}
+                placeholder="12 016"
+                aria-label="Tìm theo mã video"
+                spellCheck={false}
+                className="h-8 min-w-0 flex-1 rounded-md bg-slate-50 px-2 font-mono text-xs text-slate-900 outline-none transition-colors placeholder:text-slate-500 focus:bg-white focus:ring-2 focus:ring-blue-600/20"
+              />
+              {resolvedVideoId && resolvedVideoId !== videoQuery.trim() && (
+                <span className="shrink-0 font-mono text-[10px] text-slate-500">
+                  → {resolvedVideoId}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={submitVideoSearch}
+                disabled={loading}
+                className="h-8 shrink-0 rounded-md bg-blue-600 px-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/60 disabled:cursor-wait disabled:opacity-50"
+              >
+                Tìm
+              </button>
+            </div>
+
             <div className="flex items-center justify-between gap-2 pb-2">
               <div className="flex min-w-0 items-baseline gap-2">
                 <h2 className="truncate text-xs font-semibold text-slate-700">
@@ -947,13 +1065,13 @@ function App() {
             )}
 
             {results.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2.5 pb-8 md:grid-cols-3 min-[1100px]:grid-cols-2">
+              <div className="results-grid">
                 {results.map((hit) => (
                   <ResultCard
                     key={hitKey(hit)}
                     hit={hit}
                     selected={isHitSelected(hit)}
-                    showScore={!timelineSource}
+                    showScore={!timelineSource && !videoSearchId}
                     onSelect={handleSelect}
                     onSimilar={handleSimilar}
                     onTimeline={handleTimeline}
@@ -961,7 +1079,7 @@ function App() {
                 ))}
               </div>
             ) : loading ? (
-              <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 min-[1100px]:grid-cols-2" aria-busy="true">
+              <div className="results-grid" aria-busy="true">
                 {Array.from({ length: 6 }).map((_, index) => (
                   <div key={index} className="aspect-video animate-pulse rounded-xl bg-slate-200/70" />
                 ))}

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@theme {
+  --breakpoint-laptop: 1100px;
+}
+
 :root {
   color-scheme: light;
   --bg: #f7f7f5;
@@ -36,6 +40,19 @@ input[type="range"] {
   accent-color: var(--accent);
 }
 
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+  padding-bottom: 2rem;
+}
+
+@media (min-width: 768px) and (max-width: 1099px) {
+  .results-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .scroll-slim {
   scrollbar-width: thin;
   scrollbar-color: #94a3b8 transparent;
@@ -67,17 +84,11 @@ input[type="range"] {
   }
 }
 
-.hover-zoom {
-  animation: hover-zoom-in 120ms ease-out;
-  transform-origin: center;
-}
-
 .lightbox-figure {
   animation: hover-zoom-in 140ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hover-zoom,
   .lightbox-figure {
     animation: none;
   }

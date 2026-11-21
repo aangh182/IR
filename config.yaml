@@ -38,6 +38,7 @@ embed:
   batch_size: 128
   fp16: true
   default: clip
+  warmup_all: true       # nạp sẵn mọi profile lúc API khởi động để đổi model tức thì
   profiles:
     - name: clip
       model: sentence-transformers/clip-ViT-B-16

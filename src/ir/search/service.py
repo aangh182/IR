@@ -178,14 +178,22 @@ class SearchService:
         entries.sort(key=lambda item: (not bool(item["default"]), str(item["name"])))
         return entries
 
+    def loaded_models(self) -> list[str]:
+        with self._registry_lock:
+            return sorted(self._stores)
+
     def warmup(self) -> None:
-        try:
-            _, encoder, _ = self._ensure_loaded()
-            encoder.encode("warmup")
-        except (IndexUnavailableError, ValueError):
-            return
-        except Exception:
-            logger.exception("search warmup failed")
+        profiles = self.cfg.embed_profiles()
+        names = list(profiles) if self.cfg.embed.warmup_all else [self.cfg.embed.default]
+        for name in names:
+            try:
+                _, encoder, _ = self._ensure_loaded(name)
+                encoder.encode("warmup")
+                logger.info("warmed embedding profile %s", name)
+            except (IndexUnavailableError, ValueError) as exc:
+                logger.warning("warmup skipped for %s: %s", name, exc)
+            except Exception:
+                logger.exception("warmup failed for %s", name)
 
     def search(
         self,
@@ -327,6 +335,41 @@ class SearchService:
             elapsed_ms=int((time.perf_counter() - started) * 1000),
             results=hits,
             dres_payload=self._build_payload([source]) if source else None,
+        )
+
+    def video_keyframes(self, video_id: str) -> SearchResponse:
+        started = time.perf_counter()
+        video_id = video_id.strip()
+        with closing(connect(self.cfg.db_path)) as conn:
+            row = conn.execute(
+                "SELECT generation FROM videos WHERE video_id = ?", (video_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Không thấy video {video_id}")
+            generation = int(row["generation"])
+            rows = conn.execute(
+                """
+                SELECT kf_uid FROM keyframes
+                WHERE video_id = ? AND generation = ?
+                ORDER BY shot_idx, kf_idx, ts_ms
+                """,
+                (video_id, generation),
+            ).fetchall()
+
+        ids = [int(item["kf_uid"]) for item in rows]
+        hits = self._build_hits(
+            [(0.0, kf_uid) for kf_uid in ids],
+            len(ids),
+            dedup_shots=False,
+        )
+
+        return SearchResponse(
+            query_id=uuid.uuid4().hex,
+            query=f"video:{video_id}",
+            model="",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            results=hits,
+            dres_payload=self._build_payload(hits[:1]),
         )
 
     def _search_candidates(
